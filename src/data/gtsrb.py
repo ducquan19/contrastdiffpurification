@@ -1,232 +1,161 @@
-import os
-from torchvision.datasets import VisionDataset
-from typing import Optional, Callable
-import pandas as pd
+"""Readers for the German Traffic Sign Recognition Benchmark (43 classes, RGB, native size 32).
+
+Expected layout under ``root``::
+
+    GTSRB/Training/<class_id>/*.ppm  + GT-<class_id>.csv   training images and labels
+    GTSRB/Final_Test/Images/*.ppm                          test images
+    GT-final_test.csv                                      test labels
+
+Label files are ``;``-separated with the columns
+``Filename;Width;Height;Roi.X1;Roi.Y1;Roi.X2;Roi.Y2;ClassId``. The ROI locates the sign inside an
+image that carries a border of about 10% of the sign size around it, so ``enable_crop`` trades
+that border for a tighter crop.
+"""
+
+from __future__ import annotations
+
 import warnings
-from PIL import Image
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-@dataclass
+import pandas as pd
+from PIL import Image
+from torchvision.datasets import VisionDataset
+
+
+@dataclass(frozen=True)
 class _Item:
-    filename: str = ""
-    width: int = -1
-    height: int = -1
-    x1: int = -1
-    y1: int = -1
-    x2: int = -1
-    y2: int = -1
-    class_id: int = -1
+    """One training image: path relative to the training folder, label and sign ROI."""
 
-    # implement function for sort
-    def __lt__(self, other):
-        return self.filename < other.filename
-    
-    def __gt__(self, other):
-        return self.filename > other.filename
+    filename: str
+    class_id: int
+    roi: tuple[int, int, int, int] | None = None
 
-    def __eq__(self, other):
-        return self.filename == other.filename
+
+def _roi(row: pd.Series) -> tuple[int, int, int, int]:
+    """The sign's bounding box ``(x1, y1, x2, y2)`` from a label row."""
+    return (int(row["Roi.X1"]), int(row["Roi.Y1"]), int(row["Roi.X2"]), int(row["Roi.Y2"]))
+
 
 class GTSRBDatasetTrain(VisionDataset):
-    """
-
-    The German Traffic Sign Recognition Benchmark
-
-    Optimal Image size: 32
-    Number of classes: 43
-    Number of channels: 3
-
-    In detail, the annotations provide the following fields: 
- 
-    Filename        - Image file the following information applies to 
-    Width, Height   - Dimensions of the image 
-    Roi.x1,Roi.y1, 
-    Roi.x2,Roi.y2   - Location of the sign within the image 
-                    (Images contain a border around the actual sign 
-                    of 10 percent of the sign size, at least 5 pixel) 
-    ClassId         - The class of the traffic sign 
-
-    The Train images are located in
-    root/GTSRB/Training/
-    - label
-       - 000000_oooooo.ppm
-       - ...
-       - 000000_oooooo.ppm
-       - GT-label.csv
-    """
+    """The GTSRB training split, ordered by file name."""
 
     def __init__(
         self,
-        root: str,
-        transforms: Optional[Callable] = None,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
-        enable_crop: Optional[bool] = False,
+        root: str | Path,
+        transforms: Callable | None = None,
+        transform: Callable | None = None,
+        target_transform: Callable | None = None,
+        enable_crop: bool = False,
     ) -> None:
-        super().__init__(root, transforms, transform, target_transform)
-
+        super().__init__(str(root), transforms, transform, target_transform)
         self.enable_crop = enable_crop
+        self._img_folder = Path(root) / "GTSRB" / "Training"
+        self.images = self._read_items()
 
-        self._img_folder = os.path.join(root, "GTSRB", "Training")
-        
-        self._label_folders = []
-        for _l in os.listdir(self._img_folder):
-            if not os.path.isdir(os.path.join(self._img_folder, _l)):
-                continue
-            self._label_folders.append(_l)
-        self._label_folders.sort()
-
-        self.images = []
-        for _i, _l in enumerate(self._label_folders):
-            gt_csv = os.path.join(self._img_folder, _l, f"GT-{_l}.csv")
-            if os.path.isfile(gt_csv):
-                gt_csv = pd.read_csv(gt_csv, sep=";")
-                for i, row in gt_csv.iterrows():
-                    # Filename;Width;Height;Roi.X1;Roi.Y1;Roi.X2;Roi.Y2;ClassId
-                    _item = _Item(
-                        os.path.join(_l, row["Filename"]),
-                        row["Width"],
-                        row["Height"],
-                        row["Roi.X1"],
-                        row["Roi.Y1"],
-                        row["Roi.X2"],
-                        row["Roi.Y2"],
-                        row["ClassId"],
-                    )
-                    if os.path.isfile(os.path.join(self._img_folder, _item.filename)):
-                        self.images.append(_item)
+    def _read_items(self) -> list[_Item]:
+        """Every training image that exists on disk, in a deterministic order."""
+        items: list[_Item] = []
+        for class_dir in sorted(p for p in self._img_folder.iterdir() if p.is_dir()):
+            label_file = class_dir / f"GT-{class_dir.name}.csv"
+            if label_file.is_file():
+                items.extend(self._items_from_labels(class_dir, label_file))
             else:
-                warnings.warn(f"No csv label file found in {_l}")
-                for _f in os.listdir(os.path.join(self._img_folder, _l)):
-                    if _f.endswith("ppm"):
-                        _item = _Item(
-                            os.path.join(_l, _f),
-                            class_id=int(_l)
-                        )
-                        self.images.append(_item)
-        
-        self.images.sort(key=lambda x: x.filename)
+                warnings.warn(f"no label file in {class_dir}; labelling by folder name, no ROI")
+                items.extend(
+                    _Item(f"{class_dir.name}/{path.name}", int(class_dir.name))
+                    for path in sorted(class_dir.glob("*.ppm"))
+                )
+        items.sort(key=lambda item: item.filename)
+        return items
+
+    def _items_from_labels(self, class_dir: Path, label_file: Path) -> Iterator[_Item]:
+        """The items of one class folder, skipping rows whose image is missing."""
+        for _, row in pd.read_csv(label_file, sep=";").iterrows():
+            filename = row["Filename"]
+            if not (class_dir / filename).is_file():
+                continue
+            yield _Item(f"{class_dir.name}/{filename}", int(row["ClassId"]), _roi(row))
 
     def __len__(self) -> int:
         return len(self.images)
 
-
-    def __getitem__(self, index: int):
-        cur_img = self.images[index]
-        img = Image.open(os.path.join(self._img_folder, cur_img.filename))
-        img = img.convert("RGB")
-        if self.enable_crop:
-            img = img.crop((cur_img.x1, cur_img.y1, cur_img.x2, cur_img.y2))
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
+        item = self.images[index]
+        img = Image.open(self._img_folder / item.filename).convert("RGB")
+        if self.enable_crop and item.roi is not None:
+            img = img.crop(item.roi)
         if self.transform is not None:
             img = self.transform(img)
+        label = item.class_id
         if self.target_transform is not None:
-            cur_img.class_id = self.target_transform(cur_img.class_id)
-        return img, cur_img.class_id
+            label = self.target_transform(label)
+        return img, label
+
 
 class GTSRBDatasetTest(VisionDataset):
-
-    """
-
-    Optimal Image size: 32
-    Number of classes: 43
-    Number of channels: 3
-
-    The Test images are located in 
-    root/GTSRB/Final_Test/Images
-
-    The infomation of test images are located in 
-    root/GTSRB/Final_Test/Images/GT-final_test.test.csv
-
-    The label file is located in
-    root/GT-final_test.csv
-
-    file format:
-    Filename;Width;Height;Roi.X1;Roi.Y1;Roi.X2;Roi.Y2;ClassId
-
-
-    Requires:
-        root (string): Root directory of dataset.
-        transforms (callable, optional): A function/transforms that takes in
-            an image and a label and returns the transformed versions of both.
-        transform (callable, optional): A function/transform that  takes in an PIL image
-            and returns a transformed version. E.g, ``transforms.RandomCrop``
-        target_transform (callable, optional): A function/transform that takes in the
-            target and transforms it.
-        enable_crop: We will crop the image with rigen given in the label file
-
-    """
+    """The GTSRB test split, ordered by the label file."""
 
     def __init__(
         self,
-        root: str,
-        transforms: Optional[Callable] = None,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
-        enable_crop: Optional[bool] = False,
+        root: str | Path,
+        transforms: Callable | None = None,
+        transform: Callable | None = None,
+        target_transform: Callable | None = None,
+        enable_crop: bool = False,
     ) -> None:
-        super().__init__(root, transforms, transform, target_transform)
-
+        super().__init__(str(root), transforms, transform, target_transform)
         self.enable_crop = enable_crop
+        self._img_folder = Path(root) / "GTSRB" / "Final_Test" / "Images"
+        self._label_file = Path(root) / "GT-final_test.csv"
+        self.labels = self._read_labels()
 
-        self._img_folder = os.path.join(root, "GTSRB", "Final_Test", "Images")
-        self._label_file = os.path.join(root, "GT-final_test.csv")
-
-        # read the label_file
-        self.labels = pd.read_csv(self._label_file, sep=";")
-
-        # read the img_folder
-        imgs_set = set(i for i in os.listdir(
-            self._img_folder) if i.endswith(".ppm"))
-
-        # find  Filename in imgs_set but not in self.labels
-        none_imgs = imgs_set.difference(set(self.labels["Filename"]))
-        if len(none_imgs) > 0:
+    def _read_labels(self) -> pd.DataFrame:
+        """The label rows whose image is present on disk."""
+        labels = pd.read_csv(self._label_file, sep=";")
+        on_disk = {path.name for path in self._img_folder.glob("*.ppm")}
+        keep = labels["Filename"].isin(on_disk)
+        unlabelled = len(on_disk) - int(keep.sum())
+        if unlabelled or not keep.all():
             warnings.warn(
-                f"There are some images in Folder {self._img_folder} is not registered in the label file {self._label_file}.\nIt is possible when some images are deleted. It's better to check and download the dataset from internet.")
-            self.labels = self.labels[~self.labels["Filename"].isin(none_imgs)]
-
-    def __getitem__(self, index: int):
-        pd_row = self.labels.iloc[index]
-        img_path = os.path.join(self._img_folder, pd_row["Filename"])
-        img = Image.open(img_path).convert("RGB")
-        if self.enable_crop:
-            x1 = pd_row["Roi.X1"]
-            y1 = pd_row["Roi.Y1"]
-            x2 = pd_row["Roi.X2"]
-            y2 = pd_row["Roi.Y2"]
-            img = img.crop((x1, y1, x2, y2))
-
-        if self.transform is not None:
-            img = self.transform(img)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-        return img, int(pd_row["ClassId"])
+                f"{self._img_folder} and {self._label_file} disagree: {int((~keep).sum())} "
+                f"label(s) without an image, {unlabelled} image(s) without a label. The dataset "
+                f"is incomplete; consider downloading it again."
+            )
+        return labels[keep].reset_index(drop=True)
 
     def __len__(self) -> int:
-        return self.labels.shape[0]
+        return len(self.labels)
 
-def GTSRB(
-        root: str,
-        train: bool = True,
-        transforms: Optional[Callable] = None,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
-        enable_crop: Optional[bool] = False,
-    ) -> None:
-        if train:
-            return GTSRBDatasetTrain(
-                root=root,
-                transforms=transforms,
-                transform=transform,
-                target_transform=target_transform,
-                enable_crop=enable_crop,
-            )
-        else:
-            return GTSRBDatasetTest(
-                root=root,
-                transforms=transforms,
-                transform=transform,
-                target_transform=target_transform,
-                enable_crop=enable_crop,
-            )
-        
+    def __getitem__(self, index: int) -> tuple[Any, Any]:
+        row = self.labels.iloc[index]
+        img = Image.open(self._img_folder / row["Filename"]).convert("RGB")
+        if self.enable_crop:
+            img = img.crop(_roi(row))
+        if self.transform is not None:
+            img = self.transform(img)
+        label = int(row["ClassId"])
+        if self.target_transform is not None:
+            label = self.target_transform(label)
+        return img, label
+
+
+def build_gtsrb(
+    root: str | Path,
+    train: bool = True,
+    transforms: Callable | None = None,
+    transform: Callable | None = None,
+    target_transform: Callable | None = None,
+    enable_crop: bool = False,
+) -> VisionDataset:
+    """The GTSRB training or test split, following the torchvision dataset signature."""
+    dataset_cls = GTSRBDatasetTrain if train else GTSRBDatasetTest
+    return dataset_cls(
+        root=root,
+        transforms=transforms,
+        transform=transform,
+        target_transform=target_transform,
+        enable_crop=enable_crop,
+    )
