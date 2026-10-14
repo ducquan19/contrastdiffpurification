@@ -12,6 +12,7 @@ prints clean / robust accuracy and saves the adversarial examples as
 ``nn.DataParallel``; its counter and tag are reset through the unwrapped module.
 """
 
+import logging
 import time
 
 import torch
@@ -24,6 +25,8 @@ from src.attacks.bpda_eot.bpda_eot_attack import BPDA_EOT_Attack
 from src.attacks.stadv_eot.attacks import StAdvAttack
 from src.models.classifiers import get_image_classifier
 
+logger = logging.getLogger(__name__)
+
 
 def _unwrap(model):
     """The module inside ``nn.DataParallel`` (multi-GPU), else ``model`` itself."""
@@ -31,7 +34,7 @@ def _unwrap(model):
 
 
 def _save_adv(x_adv, y, log_dir, target, seed):
-    print(f'x_adv_{target} shape: {x_adv.shape}')
+    logger.debug('x_adv_%s shape: %s', target, tuple(x_adv.shape))
     torch.save([x_adv, y], f'{log_dir}/x_adv_{target}_sd{seed}.pt')
 
 
@@ -47,7 +50,7 @@ def eval_autoattack(args, config, model, x_val, y_val, adv_batch_size, log_dir):
     else:
         raise NotImplementedError(f'Unknown attack version: {args.attack_version}!')
 
-    print(f"attack_version: {args.attack_version}", f"attack_list: {attack_list}")
+    logger.info("attack version: %s, attacks: %s", args.attack_version, attack_list)
 
     def run(target_model, name, log_name, state_name):
         adversary = AutoAttack(
@@ -61,19 +64,19 @@ def eval_autoattack(args, config, model, x_val, y_val, adv_batch_size, log_dir):
 
         if args.attack_version == 'rand':
             adversary.apgd.eot_iter = args.eot_iter
-            print(f'[{name}] rand version with eot_iter: {adversary.apgd.eot_iter}')
+            logger.info('[%s] rand version with eot_iter: %d', name, adversary.apgd.eot_iter)
 
-        print(f'{args.lp_norm}, epsilon: {args.adv_eps}')
+        logger.info('%s, epsilon: %s', args.lp_norm, args.adv_eps)
         return adversary.run_standard_evaluation(
             x_val, y_val, bs=adv_batch_size, state_path=f"{log_dir}/{state_name}"
         )
 
-    print(f'apply the attack to classifier [{args.lp_norm}]...')
+    logger.info('AutoAttack [%s] on the classifier', args.lp_norm)
     classifier = get_image_classifier(args.classifier_name).to(config.device)
     x_adv = run(classifier, 'classifier', 'log_resnet.txt', 'adv_resnet_eval_state.json')
     _save_adv(x_adv, y_val, log_dir, 'resnet', args.seed)
 
-    print(f'apply the attack to sde_adv [{args.lp_norm}]...')
+    logger.info('AutoAttack [%s] on the purified model', args.lp_norm)
     _unwrap(model).reset_counter()
     x_adv = run(model, 'adv_sde', 'log_sde_adv.txt', 'adv_sde_eval_state.json')
     _save_adv(x_adv, y_val, log_dir, 'sde', args.seed)
@@ -87,28 +90,28 @@ def _eval_with_attack(args, config, model, x_val, y_val, adv_batch_size, log_dir
     """
     model_ = _unwrap(model)
     x_val, y_val = x_val.to(config.device), y_val.to(config.device)
-    print(f'bound: {args.adv_eps}')
+    logger.info('bound: %s', args.adv_eps)
 
-    print(f'apply the {name} attack to resnet...')
+    logger.info('%s on the classifier', name)
     resnet = get_image_classifier(args.classifier_name).to(config.device)
 
     start_time = time.time()
     init_acc = get_accuracy(resnet, x_val, y_val, bs=adv_batch_size)
-    print(f'initial accuracy: {init_acc:.2%}', f'time elapsed: {time.time() - start_time:.2f}s')
+    logger.info('initial accuracy: %.2f%%, time elapsed: %.2fs', 100 * init_acc, time.time() - start_time)
 
     adversary = build_attack(resnet)
     start_time = time.time()
     x_adv = adversary(x_val, y_val)
     robust_acc = get_accuracy(resnet, x_adv, y_val, bs=adv_batch_size)
-    print(f'robust accuracy: {robust_acc:.2%}', f'time elapsed: {time.time() - start_time:.2f}s')
+    logger.info('robust accuracy: %.2f%%, time elapsed: %.2fs', 100 * robust_acc, time.time() - start_time)
     _save_adv(x_adv, y_val, log_dir, 'resnet', args.seed)
 
-    print(f'apply the {name} attack to sde_adv...')
+    logger.info('%s on the purified model', name)
     start_time = time.time()
     model_.reset_counter()
     model_.set_tag('no_adv')
     init_acc = get_accuracy(model, x_val, y_val, bs=adv_batch_size)
-    print(f'initial accuracy: {init_acc:.2%}', f'time elapsed: {time.time() - start_time:.2f}s')
+    logger.info('initial accuracy: %.2f%%, time elapsed: %.2fs', 100 * init_acc, time.time() - start_time)
 
     adversary = build_attack(model)
     start_time = time.time()
@@ -119,7 +122,7 @@ def _eval_with_attack(args, config, model, x_val, y_val, adv_batch_size, log_dir
     model_.reset_counter()
     model_.set_tag('sde_adv')
     robust_acc = get_accuracy(model, x_adv, y_val, bs=adv_batch_size)
-    print(f'robust accuracy: {robust_acc:.2%}', f'time elapsed: {time.time() - start_time:.2f}s')
+    logger.info('robust accuracy: %.2f%%, time elapsed: %.2fs', 100 * robust_acc, time.time() - start_time)
     _save_adv(x_adv, y_val, log_dir, 'sde', args.seed)
 
 
@@ -164,29 +167,26 @@ def eval_bpda(args, config, model, x_val, y_val, adv_batch_size, log_dir):
         # row 0: correct before the attack, last row: correct after it
         init_acc = float(class_batch[0, :].sum()) / class_batch.shape[1]
         robust_acc = float(class_batch[-1, :].sum()) / class_batch.shape[1]
-        print(
-            f"init acc: {init_acc:.2%}",
-            f"robust acc: {robust_acc:.2%}",
-            f"time elapsed: {time.time() - start_time:.2f}s"
-        )
+        logger.info("initial accuracy: %.2f%%, robust accuracy: %.2f%%, time elapsed: %.2fs",
+                    100 * init_acc, 100 * robust_acc, time.time() - start_time)
         _save_adv(ims_adv_batch, y_val, log_dir, target, args.seed)
 
-    print('apply the bpda attack to resnet...')
+    logger.info('BPDA+EOT on the undefended classifier')
     resnet_bpda = UndefendedClassifier(args, config)
     if ngpus > 1:
         resnet_bpda = torch.nn.DataParallel(resnet_bpda)
 
     start_time = time.time()
     init_acc = get_accuracy(resnet_bpda, x_val, y_val, bs=adv_batch_size)
-    print(f'initial accuracy: {init_acc:.2%}', f'time elapsed: {time.time() - start_time:.2f}s')
+    logger.info('initial accuracy: %.2f%%, time elapsed: %.2fs', 100 * init_acc, time.time() - start_time)
     run(resnet_bpda, 'resnet')
 
-    print('apply the bpda attack to sde_adv...')
+    logger.info('BPDA+EOT on the purified model')
     start_time = time.time()
     model_.reset_counter()
     model_.set_tag('no_adv')
     init_acc = get_accuracy(model, x_val, y_val, bs=adv_batch_size)
-    print(f"initial accuracy: {init_acc:.2%}", f"time elapsed: {time.time() - start_time:.2f}s")
+    logger.info('initial accuracy: %.2f%%, time elapsed: %.2fs', 100 * init_acc, time.time() - start_time)
 
     model_.reset_counter()
     model_.set_tag()

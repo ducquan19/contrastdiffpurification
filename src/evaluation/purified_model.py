@@ -12,6 +12,7 @@ Both expose ``forward(x, mode)`` with ``mode`` in ``purify`` / ``classify`` /
 Images are in [0, 1] throughout.
 """
 
+import logging
 import time
 
 import torch
@@ -24,6 +25,8 @@ from src.models.diffusion.ode import ODEPurifier
 from src.models.diffusion.sde import SDEPurifier
 
 PURIFIERS = {"sde": SDEPurifier, "ode": ODEPurifier}
+
+logger = logging.getLogger(__name__)
 
 
 class UndefendedClassifier(nn.Module):
@@ -60,7 +63,7 @@ class PurifiedClassifier(nn.Module):
         # the classifier is built before the purifier: model construction consumes the torch RNG
         self.classifier = get_image_classifier(args.classifier_name).to(config.device)
 
-        print(f"diffusion_type: {args.diffusion_type}")
+        logger.info("diffusion type: %s", args.diffusion_type)
         if args.diffusion_type not in PURIFIERS:
             raise NotImplementedError(f"unknown diffusion type: {args.diffusion_type}")
         self.runner = PURIFIERS[args.diffusion_type](args, config, device=config.device)
@@ -68,7 +71,7 @@ class PurifiedClassifier(nn.Module):
         if args.guidance == "contrastive":
             self.runner.set_score_model(
                 build_contrastive_guidance(args.method_config, self.runner.model, device=config.device))
-            print("\033[34m inserted contrastive guide\033[0m")
+            logger.info("contrastive guidance attached to the score network")
 
         self.register_buffer("counter", torch.zeros(1, device=config.device))
         self.tag = None
@@ -85,7 +88,7 @@ class PurifiedClassifier(nn.Module):
         """Purify ``x`` in [0, 1]; returns the result in [-1, 1], the diffusion model's range."""
         counter = self.counter.item()
         if counter % 5 == 0:
-            print(f"diffusion times: {counter}")
+            logger.info("purifying batch %d", counter)
 
         start_time = time.time()
         x_re = self.runner.image_editing_sample(
@@ -96,9 +99,8 @@ class PurifiedClassifier(nn.Module):
         minutes, seconds = divmod(time.time() - start_time, 60)
 
         if counter % 5 == 0:
-            print(f"x shape (before diffusion models): {x.shape}")
-            print(f"x shape (before classifier): {x_re.shape}")
-            print("Sampling time per batch: {:0>2}:{:05.2f}".format(int(minutes), seconds))
+            logger.debug("input shape %s, purified shape %s", tuple(x.shape), tuple(x_re.shape))
+            logger.info("purification time per batch: %02d:%05.2f", int(minutes), seconds)
 
         self.counter += 1
 

@@ -12,6 +12,7 @@
   reverse-time dynamics and the solver.
 """
 
+import logging
 import os
 import random
 
@@ -25,6 +26,8 @@ from score_sde.models import utils as mutils
 from score_sde.models.ema import ExponentialMovingAverage
 
 from src.paths import pretrained_path
+
+logger = logging.getLogger(__name__)
 
 
 def restore_checkpoint(ckpt_dir, state, device):
@@ -43,7 +46,7 @@ def load_score_model(config, device):
     plain ``state_dict`` produced by scripts/train_score_sde.py.
     """
     dataset = config.data.dataset.lower()
-    print(f'model_config: {config}')
+    logger.debug('score model config: %s', config)
     model = mutils.create_model(config)
 
     if dataset == 'cifar10':
@@ -141,7 +144,7 @@ class DiffusionPurifier(torch.nn.Module):
         if self.args.fix_rand:
             noise_fixed = torch.FloatTensor(1, *x0.shape[1:]).\
                 normal_(0, 1, generator=torch.manual_seed(self.args.seed)).to(self.device)
-            print(f'noise_fixed: {noise_fixed[0, 0, 0, :3]}')
+            logger.debug('fixed noise (first values): %s', noise_fixed[0, 0, 0, :3])
             return noise_fixed.repeat(x0.shape[0], 1, 1, 1)
         return torch.randn_like(x0).to(self.device)
 
@@ -175,7 +178,7 @@ class DiffusionPurifier(torch.nn.Module):
             total_noise_levels = self.args.t
             if self.args.rand_t:
                 total_noise_levels = self.args.t + np.random.randint(-self.args.t_delta, self.args.t_delta)
-                print(f'total_noise_levels: {total_noise_levels}')
+                logger.debug('randomized t*: %d', total_noise_levels)
             # closed-form forward diffusion q(x_t | x_0)
             a = (1 - self.betas).cumprod(dim=0).to(self.device)
             x = x0 * a[total_noise_levels - 1].sqrt() + e * (1.0 - a[total_noise_levels - 1]).sqrt()

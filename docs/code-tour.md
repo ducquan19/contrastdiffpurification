@@ -84,7 +84,7 @@ Chữ ký hàm được viết rút gọn. "→" là giá trị trả về.
   con số được báo cáo đã sinh ra từ cấu hình nào.
 * `robustness_eval(args, config)`. Driver chính. Dựng đường dẫn output
   `<exp>/<i>/<classifier>/<diffusion>_<attack>/seed<S>/data<D>`, chuyển stdout vào `log.txt` qua
-  `utils.Logger`, nạp dữ liệu và model, rồi dispatch theo `--attack_version`.
+  `utils.StdoutTee`, nạp dữ liệu và model, rồi dispatch theo `--attack_version`.
   **Thứ tự "nạp dữ liệu" và "dựng model" khác nhau giữa `--guidance none` và `contrastive`**, và
   được giữ nguyên có chủ ý: việc lặp qua một `DataLoader` tiêu thụ RNG toàn cục của torch, nên đổi
   thứ tự sẽ đổi nhiễu khuếch tán với cùng một `--seed`.

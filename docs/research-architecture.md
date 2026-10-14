@@ -161,7 +161,7 @@ src/
 ├── paths.py                 thư mục gốc của data / pretrained / outputs / configs (đổi được qua biến môi trường)
 ├── config.py                schema config score-SDE + loader strict (dùng chung cho eval và training)
 ├── method.py                siêu tham số contrastive: configs/method/ + hợp nhất với CLI
-├── utils.py                 Logger (stdout → log.txt), str2bool
+├── utils.py                 setup_logging, StdoutTee (stdout/stderr → log.txt), str2bool
 ├── guidance/                contrastive.py (★ phương pháp), build.py (bọc score network)
 ├── models/diffusion/        base.py (phần dùng chung), sde.py, ode.py (bộ thanh lọc DiffPure trên score_sde)
 ├── models/classifiers/      get_image_classifier, cifar10_resnet.py

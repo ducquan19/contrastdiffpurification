@@ -14,8 +14,13 @@ python -m scripts.convert_lightning_checkpoint --ckpt_path=path/to/checkpoint.ck
 """
 
 import argparse
+import logging
 
 import torch
+
+from src.utils import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 class TreeNode:
@@ -77,50 +82,47 @@ _args.add_argument(
     default=0,
     help="Show the depth of the model prefix in the weight name."
 )
-args = _args.parse_args()
-
-lightning_checkpoint = torch.load(
-    args.ckpt_path, map_location=torch.device('cpu'))
-try:
-    state_dict = lightning_checkpoint['state_dict']  # type: dict
-    print(lightning_checkpoint.keys())
-except Exception:
-    state_dict = lightning_checkpoint
-
-print("loaded state dict")
-
-if args.show_prefix_depth > 0:
-    print("show prefix")
-    mkey = TreeNode("")
-    for k in state_dict.keys():
-        mkey.build_tree(k)
-
-    print(mkey.__str__(0, args.show_prefix_depth))
-
-if args.out_path is None:
-    print("out_path is None")
-    print("do not save the state_dict")
-    print("done")
-    exit(0)
 
 
-if args.remove_prefix != "":
-    remove_prefix = args.remove_prefix
-    if not remove_prefix.endswith("."):
-        remove_prefix += "."
+def main():
+    args = _args.parse_args()
+    setup_logging()
 
-    print("remove prefix \033[32m", remove_prefix, "\033[0m")
-    klen = len(remove_prefix)
-    all_keys = list(state_dict.keys())
-    for k in all_keys:
-        old_k = k
-        if k.startswith(remove_prefix):
-            k = k[klen:]
-        else:
-            continue
-        print(f"{old_k} => {k}")
-        state_dict[k] = state_dict.pop(old_k)
+    lightning_checkpoint = torch.load(args.ckpt_path, map_location=torch.device('cpu'))
+    try:
+        state_dict = lightning_checkpoint['state_dict']  # type: dict
+        logger.info("checkpoint keys: %s", list(lightning_checkpoint.keys()))
+    except Exception:
+        state_dict = lightning_checkpoint
+    logger.info("loaded state dict with %d tensors", len(state_dict))
 
-print("save new state dict")
-torch.save(state_dict, args.out_path)
-print("done")
+    if args.show_prefix_depth > 0:
+        mkey = TreeNode("")
+        for k in state_dict.keys():
+            mkey.build_tree(k)
+        logger.info("parameter prefixes:\n%s", mkey.__str__(0, args.show_prefix_depth))
+
+    if args.out_path is None:
+        logger.info("no --out_path given; nothing saved")
+        return
+
+    if args.remove_prefix != "":
+        remove_prefix = args.remove_prefix
+        if not remove_prefix.endswith("."):
+            remove_prefix += "."
+
+        logger.info("removing prefix '%s'", remove_prefix)
+        klen = len(remove_prefix)
+        for old_k in list(state_dict.keys()):
+            if not old_k.startswith(remove_prefix):
+                continue
+            k = old_k[klen:]
+            logger.debug("%s => %s", old_k, k)
+            state_dict[k] = state_dict.pop(old_k)
+
+    torch.save(state_dict, args.out_path)
+    logger.info("state dict saved to %s", args.out_path)
+
+
+if __name__ == "__main__":
+    main()

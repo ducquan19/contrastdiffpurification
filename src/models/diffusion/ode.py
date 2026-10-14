@@ -12,10 +12,14 @@ published method: ``torchdiffeq.odeint_adjoint`` with ``method='euler'`` and
 ``--t`` (t*) are configurable.
 """
 
+import logging
+
 import torch
 from torchdiffeq import odeint_adjoint
 
 from src.models.diffusion.base import DiffusionPurifier, VPDynamics
+
+logger = logging.getLogger(__name__)
 
 
 class VPODE(VPDynamics):
@@ -44,7 +48,8 @@ class ODEPurifier(DiffusionPurifier):
         # fixed solver settings; see the module docstring
         self.atol, self.rtol = 1e-3, 1e-3
         self.method = 'euler'
-        print(f'method: {self.method}, atol: {self.atol}, rtol: {self.rtol}, step_size: {self.args.step_size}')
+        logger.info('ODE solver: %s, atol %g, rtol %g, step size %g', self.method, self.atol, self.rtol,
+                    self.args.step_size)
 
     def _build_dynamics(self, model, img_shape):
         return VPODE(model=model, img_shape=img_shape)

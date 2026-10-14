@@ -30,9 +30,11 @@ from src.evaluation.purified_model import PurifiedClassifier
 from src.method import CLI_FIELDS, DEFAULT_METHOD_CONFIG, ESTIMATORS, cli_dest
 from src.method import resolve_contrastive
 from src.paths import output_path
-from src.utils import Logger, str2bool
+from src.utils import StdoutTee, setup_logging, str2bool
 
 GUIDANCE_CHOICES = ['none', 'contrastive']
+
+logger = logging.getLogger(__name__)
 
 ATTACKS = {
     'standard': eval_autoattack,
@@ -64,7 +66,7 @@ def record_run_config(args, log_dir):
 
 
 def _start_run(args, middle_name):
-    """Create the run's log folder, start mirroring stdout to ``log.txt`` and record the config."""
+    """Create the run's log folder, start mirroring stdout/stderr to ``log.txt``, record the config."""
     log_dir = os.path.join(
         args.image_folder,
         args.classifier_name,
@@ -75,14 +77,15 @@ def _start_run(args, middle_name):
     os.makedirs(log_dir, exist_ok=True)
     args.log_dir = log_dir
 
-    logger = Logger(file_name=f'{log_dir}/log.txt', file_mode="w+", should_flush=True)
+    tee = StdoutTee(file_name=f'{log_dir}/log.txt', file_mode="w+", should_flush=True)
     record_run_config(args, log_dir)
-    return log_dir, logger
+    logger.info("run folder: %s", log_dir)
+    return log_dir, tee
 
 
 def _build_model(args, config, ngpus):
     """The purified classifier in eval mode, wrapped in ``DataParallel`` on several GPUs."""
-    print("starting the model and loader...")
+    logger.info("building the purified model")
     model = PurifiedClassifier(args, config)
     if ngpus > 1:
         model = torch.nn.DataParallel(model)
@@ -96,7 +99,7 @@ def robustness_eval(args, config):
     parts = [args.diffusion_type, args.attack_version]
     if args.attack_version not in ["stadv", "standard", "rand"]:
         parts.append(args.attack_type)
-    log_dir, logger = _start_run(args, "_".join(parts))
+    log_dir, tee = _start_run(args, "_".join(parts))
 
     ngpus = torch.cuda.device_count()
 
@@ -104,7 +107,7 @@ def robustness_eval(args, config):
         raise ValueError("contrastive_data_drift is not supported for multi-gpu")
 
     adv_batch_size = args.adv_batch_size * ngpus
-    print(f"ngpus: {ngpus}, adv_batch_size: {adv_batch_size}")
+    logger.info("GPUs: %d, attack batch size: %d", ngpus, adv_batch_size)
 
     # The data/model order differs between the two modes and is kept that way on purpose:
     # the DataLoader and the model construction both consume the global torch RNG, so swapping
@@ -116,7 +119,7 @@ def robustness_eval(args, config):
         if args.contrastive_data_drift >= 0:
             lo = args.contrastive_data_drift * args.adv_batch_size
             hi = lo + args.adv_batch_size
-            print(f"use data drift mode; pick x_val[{lo}:{hi}]")
+            logger.info("data drift mode: evaluating x_val[%d:%d]", lo, hi)
             x_val, y_val = x_val[lo:hi], y_val[lo:hi]
 
         model = _build_model(args, config, ngpus)
@@ -128,7 +131,7 @@ def robustness_eval(args, config):
         raise NotImplementedError(f"unknown attack_version: {args.attack_version}")
     ATTACKS[args.attack_version](args, config, model, x_val, y_val, adv_batch_size, log_dir)
 
-    logger.close()
+    tee.close()
 
     if not contrastive and ngpus > 1 and dist.is_available() and dist.is_initialized():
         dist.destroy_process_group()
@@ -136,18 +139,18 @@ def robustness_eval(args, config):
 
 def bpda_robustness_eval(args, config):
     """Run BPDA+EOT against the purifier."""
-    log_dir, logger = _start_run(args, '_'.join([args.diffusion_type, 'bpda']))
+    log_dir, tee = _start_run(args, '_'.join([args.diffusion_type, 'bpda']))
 
     ngpus = torch.cuda.device_count()
     adv_batch_size = args.adv_batch_size * ngpus
-    print(f"ngpus: {ngpus}, adv_batch_size: {adv_batch_size}")
+    logger.info("GPUs: %d, attack batch size: %d", ngpus, adv_batch_size)
 
     model = _build_model(args, config, ngpus)
     x_val, y_val = load_data(args, log_dir=log_dir)
 
     eval_bpda(args, config, model, x_val, y_val, adv_batch_size, log_dir)
 
-    logger.close()
+    tee.close()
 
 
 def _add_common_args(parser, adv_batch_size, num_sub):
@@ -271,19 +274,7 @@ def setup(args):
         else None
     )
 
-    level = getattr(logging, args.verbose.upper(), None)
-    if not isinstance(level, int):
-        raise ValueError('level {} not supported'.format(args.verbose))
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(
-        logging.Formatter(
-            '%(levelname)s - %(filename)s - %(asctime)s - %(message)s'
-        )
-    )
-    logger = logging.getLogger()
-    logger.addHandler(handler)
-    logger.setLevel(level)
+    setup_logging(args.verbose)
 
     if not os.path.isabs(args.exp):
         args.exp = os.path.normpath(output_path(args.exp))
@@ -293,7 +284,7 @@ def setup(args):
 
     device = torch.device(
         'cuda') if torch.cuda.is_available() else torch.device('cpu')
-    logging.info("Using device: {}".format(device))
+    logger.info("device: %s", device)
     new_config.device = device
 
     torch.manual_seed(args.seed)

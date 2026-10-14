@@ -13,11 +13,15 @@ solver is what makes exact gradients available to an adaptive attack. ``--t`` se
 ``--use_bm`` adds a fixed Brownian interval.
 """
 
+import logging
+
 import numpy as np
 import torch
 import torchsde
 
 from src.models.diffusion.base import DiffusionPurifier, VPDynamics
+
+logger = logging.getLogger(__name__)
 
 
 class RevVPSDE(VPDynamics):
@@ -53,8 +57,8 @@ class SDEPurifier(DiffusionPurifier):
 
     def __init__(self, args, config, device=None):
         super().__init__(args, config, device)
-        print(f't: {args.t}, rand_t: {args.rand_t}, t_delta: {args.t_delta}')
-        print(f'use_bm: {args.use_bm}')
+        logger.info('reverse SDE: t* = %d, rand_t %s, t_delta %d, use_bm %s',
+                    args.t, args.rand_t, args.t_delta, args.use_bm)
 
     def _build_dynamics(self, model, img_shape):
         return RevVPSDE(model=model, img_shape=img_shape)

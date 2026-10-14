@@ -5,6 +5,7 @@ Run from the repository root:
     python -m scripts.train_score_sde --mode train --dataset gtsrb --config_path configs/gtsrb.yml ...
 """
 import argparse
+import logging
 import os
 
 import pytorch_lightning as pl
@@ -17,6 +18,9 @@ from src.data.specs import DATASET_NAMES, get_dataset_spec
 from src.paths import config_path, output_path
 from src.config import load_config
 from src.training.score_sde_module import ScoreSDETrain, get_data_scaler
+from src.utils import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -89,10 +93,11 @@ def main():
         help="max epochs for train"
     )
     args = _args.parse_args()
+    setup_logging()
     main_config = load_config(args.config_path)
 
     if args.mode == "generate":
-        print("generate the sample images using pretrained checkpoint", args.checkpoint)
+        logger.info("generating samples with checkpoint %s", args.checkpoint)
 
         try:
             model = ScoreSDETrain.load_from_checkpoint(args.checkpoint, config=main_config).cuda()
@@ -112,7 +117,7 @@ def main():
 
         # save with torch vision
         torchvision.utils.save_image(samples, args.generate_file)
-        print("samples saved to", args.generate_file)
+        logger.info("samples saved to %s", args.generate_file)
 
     elif args.mode == "train":
 

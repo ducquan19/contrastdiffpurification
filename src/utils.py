@@ -4,16 +4,50 @@
 # This work is licensed under the NVIDIA Source Code License
 # for DiffPure. To view a copy of this license, see the LICENSE file.
 # ---------------------------------------------------------------
-"""Small helpers shared by the entry points: stdout/stderr tee logger and a bool CLI type."""
-import sys
+"""Helpers shared by the entry points: logging setup, a stdout/stderr tee and a bool CLI type."""
 import argparse
+import logging
+import sys
 from typing import Optional
 
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
-class Logger(object):
+
+class _CurrentStdoutHandler(logging.StreamHandler):
+    """StreamHandler that always writes to the *current* ``sys.stdout``.
+
+    A plain StreamHandler keeps the stream it was created with, so records would bypass a
+    ``StdoutTee`` installed later and never reach the run's log file.
     """
-    Redirect stderr to stdout, optionally print stdout to a file,
-    and optionally force flushing on both stdout and the file.
+
+    def __init__(self):
+        super().__init__(sys.stdout)
+
+    @property
+    def stream(self):
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, value):
+        pass
+
+
+def setup_logging(level: str = "info") -> None:
+    """Send records of every logger to stdout with a timestamp; ``level`` is a logging level name."""
+    numeric = getattr(logging, level.upper(), None)
+    if not isinstance(numeric, int):
+        raise ValueError(f"unknown log level '{level}'")
+    handler = _CurrentStdoutHandler()
+    handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt="%Y-%m-%d %H:%M:%S"))
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(numeric)
+
+
+class StdoutTee(object):
+    """
+    Mirror stdout and stderr (log records, third-party prints, tracebacks) into a file,
+    optionally flushing after every write.
     """
 
     def __init__(self, file_name: Optional[str] = None, file_mode: str = "w", should_flush: bool = True):
@@ -53,7 +87,7 @@ class Logger(object):
         """Flush, close possible files, and remove stdout/stderr mirroring."""
         self.flush()
 
-        # if using multiple loggers, prevent closing in wrong order
+        # if several tees are stacked, only undo our own redirection
         if sys.stdout is self:
             sys.stdout = self.stdout
         if sys.stderr is self:

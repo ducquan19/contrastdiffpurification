@@ -13,11 +13,15 @@
 
 """ Holds the various attacks we can do """
 
+import logging
+
 import torch
 from torch.autograd import Variable
 from torch import optim
 
 from . import pytorch_utils as utils
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -140,7 +144,7 @@ class PGD(AdversarialAttack):
         param_list = list(perturbation.parameters())
         assert len(param_list) == 1, len(param_list)
         param = param_list[0]
-        print(f'inside PGD attack, eot_iter: {eot_iter}, max_iterations: {max_iterations}')
+        logger.debug('PGD attack: eot_iter %d, max_iterations %d', eot_iter, max_iterations)
         for iter_no in range(max_iterations):
             perturbation.zero_grad()
 

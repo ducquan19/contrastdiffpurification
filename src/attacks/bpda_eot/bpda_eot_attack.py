@@ -11,11 +11,15 @@
 # The modifications to this file are subject to the same license.
 # ---------------------------------------------------------------
 
+import logging
+
 import torch
 import torch.nn.functional as F
 
 criterion = torch.nn.CrossEntropyLoss()
 
+
+logger = logging.getLogger(__name__)
 
 class BPDA_EOT_Attack():
     def __init__(self, model, adv_eps=8.0/255, eot_defense_reps=150, eot_attack_reps=15):
@@ -33,7 +37,7 @@ class BPDA_EOT_Attack():
             'log_freq': 10
         }
 
-        print(f'BPDA_EOT config: {self.config}')
+        logger.info('BPDA_EOT config: %s', self.config)
 
     def purify(self, x):
         return self.model(x, mode='purify')
@@ -127,7 +131,7 @@ class BPDA_EOT_Attack():
     def attack_batch(self, X, y):
         # get baseline accuracy for natural images
         defended = self.eval_and_bpda_eot_grad(X, y, torch.ones_like(y).bool(), False)[0]
-        print('Baseline: {} of {}'.format(defended.sum(), len(defended)))
+        logger.info('baseline: %d of %d defended', int(defended.sum()), len(defended))
 
         class_batch = torch.zeros([self.config['adv_steps'] + 2, X.shape[0]]).bool()
         class_batch[0] = defended.cpu()
@@ -153,11 +157,11 @@ class BPDA_EOT_Attack():
                 X_adv = X_adv.detach().clone()
 
             if step == 1 or step % self.config['log_freq'] == 0 or step == self.config['adv_steps']:
-                print('Attack {} of {}   Batch defended: {} of {}'.
-                      format(step, self.config['adv_steps'], int(torch.sum(defended).cpu().numpy()), X_adv.shape[0]))
+                logger.info('attack %d of %d, batch defended: %d of %d', step, self.config['adv_steps'],
+                            int(torch.sum(defended).cpu().numpy()), X_adv.shape[0])
 
             if int(torch.sum(defended).cpu().numpy()) == 0:
-                print('Attack successfully to the batch!')
+                logger.info('the whole batch is broken')
                 break
 
         for ind in range(defended.nelement()):
@@ -180,6 +184,6 @@ class BPDA_EOT_Attack():
             class_batch, ims_adv_batch = self.attack_batch(X_batch.contiguous(), y_batch.contiguous())
             class_path = torch.cat((class_path, class_batch), dim=1)
             ims_adv = torch.cat((ims_adv, ims_adv_batch), dim=0)
-            print(f'finished {counter}-th batch in attack_all')
+            logger.info('finished batch %d', counter)
 
         return class_path, ims_adv

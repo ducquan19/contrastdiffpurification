@@ -10,6 +10,7 @@
 Every returned model takes images in [0, 1] and normalizes internally.
 """
 
+import logging
 from collections import OrderedDict
 
 import torch
@@ -24,6 +25,8 @@ from src.paths import pretrained_path
 
 # RobustBench downloads its checkpoints here (instead of ./models relative to the cwd).
 ROBUSTBENCH_MODEL_DIR = pretrained_path('robustbench')
+
+logger = logging.getLogger(__name__)
 
 
 class ImageNetNormalized(nn.Module):
@@ -76,7 +79,7 @@ def update_state_dict(state_dict, idx_start=9):
 def _load_weights(model, relative_path, strip_prefix=0):
     """Load ``pretrained/<relative_path>`` into ``model`` and return it in eval mode."""
     model_path = pretrained_path(relative_path)
-    print(f"=> loading checkpoint '{model_path}'")
+    logger.info("loading checkpoint %s", model_path)
     state_dict = torch.load(model_path, map_location=torch.device('cpu'))
     if strip_prefix:
         state_dict = update_state_dict(state_dict, idx_start=strip_prefix)
@@ -91,7 +94,7 @@ def get_image_classifier(classifier_name: str):
     ``cifar100-wideresnet-28-10``, ``gtsrb-{wrideresnet-28-10, resnet18}`` (the ``wrideresnet``
     spelling is part of the GTSRB name). Matching is by substring.
     """
-    print(f'using {classifier_name}...')
+    logger.info("classifier: %s", classifier_name)
 
     # 'cifar100' must be checked before 'cifar10', which is a substring of it
     if 'cifar100' in classifier_name:

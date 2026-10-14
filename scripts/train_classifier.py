@@ -5,6 +5,7 @@ Run from the repository root:
     python -m scripts.train_classifier --backbone wrideresnet-28-10 --dataset cifar100 ...
 """
 import argparse
+import logging
 import os
 
 import pytorch_lightning as pl
@@ -16,6 +17,9 @@ from torchvision import transforms
 from src.data.specs import DATASET_NAMES, get_dataset_spec
 from src.paths import output_path
 from src.training.classifier_module import DMClassifier
+from src.utils import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def build_transform(train: bool):
@@ -109,7 +113,8 @@ def main():
     args = _args.parse_args()
     args.checkpoint = args.checkpoint.format(backbone=args.backbone)
 
-    print(args)
+    setup_logging()
+    logger.info("arguments: %s", args)
 
     # test mode evaluates without augmentation; training validates with the training transform
     spec = get_dataset_spec(args.dataset)
