@@ -12,25 +12,19 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.autograd import Function
+# from torch.utils.cpp_extension import load
+
+from score_sde.op import fused
 
 
-_fused = None
-
-
-def _fused_op():
-    """The compiled ``fused`` extension, built on first use (GPU only; needs nvcc)."""
-    global _fused
-    if _fused is None:
-        from torch.utils.cpp_extension import load
-        module_path = os.path.dirname(__file__)
-        _fused = load(
-            "fused",
-            sources=[
-                os.path.join(module_path, "fused_bias_act.cpp"),
-                os.path.join(module_path, "fused_bias_act_kernel.cu"),
-            ],
-        )
-    return _fused
+# module_path = os.path.dirname(__file__)
+# fused = load(
+#     "fused",
+#     sources=[
+#         os.path.join(module_path, "fused_bias_act.cpp"),
+#         os.path.join(module_path, "fused_bias_act_kernel.cu"),
+#     ],
+# )
 
 
 class FusedLeakyReLUFunctionBackward(Function):
@@ -42,7 +36,7 @@ class FusedLeakyReLUFunctionBackward(Function):
 
         empty = grad_output.new_empty(0)
 
-        grad_input = _fused_op().fused_bias_act(
+        grad_input = fused.fused_bias_act(
             grad_output, empty, out, 3, 1, negative_slope, scale
         )
 
@@ -58,7 +52,7 @@ class FusedLeakyReLUFunctionBackward(Function):
     @staticmethod
     def backward(ctx, gradgrad_input, gradgrad_bias):
         out, = ctx.saved_tensors
-        gradgrad_out = _fused_op().fused_bias_act(
+        gradgrad_out = fused.fused_bias_act(
             gradgrad_input, gradgrad_bias, out, 3, 1, ctx.negative_slope, ctx.scale
         )
 
@@ -69,7 +63,7 @@ class FusedLeakyReLUFunction(Function):
     @staticmethod
     def forward(ctx, input, bias, negative_slope, scale):
         empty = input.new_empty(0)
-        out = _fused_op().fused_bias_act(input, bias, empty, 3, 0, negative_slope, scale)
+        out = fused.fused_bias_act(input, bias, empty, 3, 0, negative_slope, scale)
         ctx.save_for_backward(out)
         ctx.negative_slope = negative_slope
         ctx.scale = scale

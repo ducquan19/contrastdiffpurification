@@ -20,8 +20,7 @@ src/                       code nghiên cứu (`import src…`)
 ├── guidance/contrastive.py      ★ phương pháp: ContrastiveGuidedDiffusion, ContrastiveLoss
 ├── models/diffusion/            bộ thanh lọc DiffPure: reverse SDE (sde.py), probability-flow ODE (ode.py)
 ├── models/classifiers/          tập classifier (RobustBench / các model CIFAR-10 của DiffPure)
-├── models/score_sde/            score_sde (NCSN++, SDE, loss, sampler) từ thượng nguồn; CUDA op biên dịch khi dùng lần đầu
-├── attacks/                     attack từ thượng nguồn: autoattack/, bpda_eot/, stadv_eot/
+├── attacks/                     attack từ thượng nguồn: bpda_eot/, stadv_eot/
 ├── data/                        specs.py (registry dataset), loaders.py (subset đánh giá), gtsrb.py
 ├── evaluation/                  model đã thanh lọc, các attack, driver đánh giá và CLI
 ├── training/                    Lightning module để huấn luyện score-SDE và classifier
@@ -33,6 +32,7 @@ experiments/               mỗi thí nghiệm một shell script (baseline/, co
 configs/                   config diffusion theo dataset + method/contrastive.yaml (xem configs/README.md)
 tests/                     test chạy trên CPU (pytest)
 docs/                      kiến trúc, tái lập, hướng dẫn phát triển
+external/                  package thượng nguồn cài bằng pip: auto-attack (autoattack), score_sde
 data/  pretrained/  outputs/     bị git bỏ qua: dataset, checkpoint, kết quả
 ```
 
@@ -41,6 +41,8 @@ data/  pretrained/  outputs/     bị git bỏ qua: dataset, checkpoint, kết q
 ```bash
 pip install torch torchvision                 # bản CUDA khớp driver của bạn
 pip install -r requirements.txt
+pip install ./external/auto-attack
+pip install --no-build-isolation ./external/score_sde   # biên dịch CUDA op: cần GPU + nvcc
 pip install -e .                              # không bắt buộc
 
 # đặt score model CIFAR-10 tại pretrained/score_sde/checkpoint_8.pth (xem docs/reproduction.md)

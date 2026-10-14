@@ -19,10 +19,10 @@ import numpy as np
 import torch
 import torchvision.utils as tvu
 
-from src.models.score_sde import sde_lib
-from src.models.score_sde.losses import get_optimizer
-from src.models.score_sde.models import utils as mutils
-from src.models.score_sde.models.ema import ExponentialMovingAverage
+from score_sde import sde_lib
+from score_sde.losses import get_optimizer
+from score_sde.models import utils as mutils
+from score_sde.models.ema import ExponentialMovingAverage
 
 from src.paths import pretrained_path
 

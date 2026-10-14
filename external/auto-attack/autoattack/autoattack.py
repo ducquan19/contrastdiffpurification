@@ -1,60 +1,82 @@
+import math
 import time
 
 import numpy as np
 import torch
 
-from .autopgd_base import APGDAttack, APGDAttack_targeted
-from .fab import FABAttack
 from .other_utils import Logger
-from .square import SquareAttack
-from . import checks
-from .state import EvaluationState
+from autoattack import checks
+from autoattack.state import EvaluationState
 import warnings
 import pathlib
 
 
 class AutoAttack():
-    """AutoAttack ``standard`` (APGD-CE, APGD-T, FAB-T, Square) or ``rand`` (APGD-CE/DLR + EOT).
-
-    Linf and L2 threat models; the model is a PyTorch module returning logits.
-    """
-
     def __init__(self, model, norm='Linf', eps=.3, seed=None, verbose=True,
-                 attacks_to_run=[], version='standard', device='cuda', log_path=None):
+                 attacks_to_run=[], version='standard', is_tf_model=False,
+                 device='cuda', log_path=None):
         self.model = model
         self.norm = norm
-        assert norm in ['Linf', 'L2']
+        assert norm in ['Linf', 'L2', 'L1']
         self.epsilon = eps
         self.seed = seed
         self.verbose = verbose
         self.attacks_to_run = attacks_to_run
         self.version = version
+        self.is_tf_model = is_tf_model
         self.device = device
         self.logger = Logger(log_path)
 
-        if version in ['standard', 'rand'] and attacks_to_run != []:
+        if version in ['standard', 'plus', 'rand'] and attacks_to_run != []:
             warnings.warn("attacks_to_run will be overridden unless you use version='custom'")
-
-        self.apgd = APGDAttack(self.model, n_restarts=5, n_iter=100, verbose=False,
-            eps=self.epsilon, norm=self.norm, eot_iter=1, rho=.75, seed=self.seed,
-            device=self.device, logger=self.logger)
-
-        self.fab = FABAttack(self.model, n_restarts=5, n_iter=100, eps=self.epsilon, seed=self.seed,
-            norm=self.norm, verbose=False, device=self.device)
-
-        self.square = SquareAttack(self.model, p_init=.8, n_queries=5000, eps=self.epsilon, norm=self.norm,
-            n_restarts=1, seed=self.seed, verbose=False, device=self.device, resc_schedule=False)
-
-        self.apgd_targeted = APGDAttack_targeted(self.model, n_restarts=1, n_iter=100, verbose=False,
-            eps=self.epsilon, norm=self.norm, eot_iter=1, rho=.75, seed=self.seed, device=self.device,
-            logger=self.logger)
-
-        if version in ['standard', 'rand']:
+        
+        if not self.is_tf_model:
+            from .autopgd_base import APGDAttack
+            self.apgd = APGDAttack(self.model, n_restarts=5, n_iter=100, verbose=False,
+                eps=self.epsilon, norm=self.norm, eot_iter=1, rho=.75, seed=self.seed,
+                device=self.device, logger=self.logger)
+            
+            from .fab_pt import FABAttack_PT
+            self.fab = FABAttack_PT(self.model, n_restarts=5, n_iter=100, eps=self.epsilon, seed=self.seed,
+                norm=self.norm, verbose=False, device=self.device)
+        
+            from .square import SquareAttack
+            self.square = SquareAttack(self.model, p_init=.8, n_queries=5000, eps=self.epsilon, norm=self.norm,
+                n_restarts=1, seed=self.seed, verbose=False, device=self.device, resc_schedule=False)
+                
+            from .autopgd_base import APGDAttack_targeted
+            self.apgd_targeted = APGDAttack_targeted(self.model, n_restarts=1, n_iter=100, verbose=False,
+                eps=self.epsilon, norm=self.norm, eot_iter=1, rho=.75, seed=self.seed, device=self.device,
+                logger=self.logger)
+    
+        else:
+            from .autopgd_base import APGDAttack
+            self.apgd = APGDAttack(self.model, n_restarts=5, n_iter=100, verbose=False,
+                eps=self.epsilon, norm=self.norm, eot_iter=1, rho=.75, seed=self.seed, device=self.device,
+                is_tf_model=True, logger=self.logger)
+            
+            from .fab_tf import FABAttack_TF
+            self.fab = FABAttack_TF(self.model, n_restarts=5, n_iter=100, eps=self.epsilon, seed=self.seed,
+                norm=self.norm, verbose=False, device=self.device)
+        
+            from .square import SquareAttack
+            self.square = SquareAttack(self.model.predict, p_init=.8, n_queries=5000, eps=self.epsilon, norm=self.norm,
+                n_restarts=1, seed=self.seed, verbose=False, device=self.device, resc_schedule=False)
+                
+            from .autopgd_base import APGDAttack_targeted
+            self.apgd_targeted = APGDAttack_targeted(self.model, n_restarts=1, n_iter=100, verbose=False,
+                eps=self.epsilon, norm=self.norm, eot_iter=1, rho=.75, seed=self.seed, device=self.device,
+                is_tf_model=True, logger=self.logger)
+    
+        if version in ['standard', 'plus', 'rand']:
             self.set_version(version)
-
+        
     def get_logits(self, x):
-        return self.model(x)
-
+        if not self.is_tf_model:
+            return self.model(x)
+        else:
+            return self.model.predict(x)
+    
     def get_seed(self):
         return time.time() if self.seed is None else self.seed
     
@@ -79,7 +101,7 @@ class AutoAttack():
                     self.logger.log("Since the state has been restored, **only** "
                                     "the adversarial examples from the current run "
                                     "are going to be returned.")
-            except Exception:
+            except Exception as e:
                 new_state = True
         else:
             new_state = True
@@ -103,7 +125,8 @@ class AutoAttack():
                 y_orig[:bs].to(self.device), bs=bs, logger=self.logger)
         n_cls = checks.check_range_output(self.get_logits, x_orig[:bs].to(self.device),
             logger=self.logger)
-        checks.check_dynamic(self.model, x_orig[:bs].to(self.device), logger=self.logger)
+        checks.check_dynamic(self.model, x_orig[:bs].to(self.device), self.is_tf_model,
+            logger=self.logger)
         checks.check_n_classes(n_cls, self.attacks_to_run, self.apgd_targeted.n_target_classes,
             self.fab.n_target_classes, logger=self.logger)
         
@@ -194,6 +217,12 @@ class AutoAttack():
                         self.apgd.seed = self.get_seed()
                         adv_curr = self.apgd.perturb(x, y) #cheap=True
                     
+                    elif attack == 'fab':
+                        # fab
+                        self.fab.targeted = False
+                        self.fab.seed = self.get_seed()
+                        adv_curr = self.fab.perturb(x, y)
+                    
                     elif attack == 'square':
                         # square
                         self.square.seed = self.get_seed()
@@ -206,6 +235,7 @@ class AutoAttack():
                     
                     elif attack == 'fab-t':
                         # fab targeted
+                        self.fab.targeted = True
                         self.fab.n_restarts = 1
                         self.fab.seed = self.get_seed()
                         adv_curr = self.fab.perturb(x, y)
@@ -244,6 +274,8 @@ class AutoAttack():
                     res = (x_adv - x_orig).abs().reshape(x_orig.shape[0], -1).max(1)[0]
                 elif self.norm == 'L2':
                     res = ((x_adv - x_orig) ** 2).reshape(x_orig.shape[0], -1).sum(-1).sqrt()
+                elif self.norm == 'L1':
+                    res = (x_adv - x_orig).abs().reshape(x_orig.shape[0], -1).sum(dim=-1)
                 self.logger.log('max {} perturbation: {:.5f}, nan in tensor: {}, max: {:.5f}, min: {:.5f}'.format(
                     self.norm, res.max(), (x_adv != x_adv).sum(), x_adv.max(), x_adv.min()))
                 self.logger.log('robust accuracy: {:.2%}'.format(robust_accuracy))
@@ -252,20 +284,80 @@ class AutoAttack():
         else:
             return x_adv
         
+    def clean_accuracy(self, x_orig, y_orig, bs=250):
+        n_batches = math.ceil(x_orig.shape[0] / bs)
+        acc = 0.
+        for counter in range(n_batches):
+            x = x_orig[counter * bs:min((counter + 1) * bs, x_orig.shape[0])].clone().to(self.device)
+            y = y_orig[counter * bs:min((counter + 1) * bs, x_orig.shape[0])].clone().to(self.device)
+            output = self.get_logits(x)
+            acc += (output.max(1)[1] == y).float().sum()
+            
+        if self.verbose:
+            print('clean accuracy: {:.2%}'.format(acc / x_orig.shape[0]))
+        
+        return acc.item() / x_orig.shape[0]
+        
+    def run_standard_evaluation_individual(self, x_orig, y_orig, bs=250, return_labels=False):
+        if self.verbose:
+            print('using {} version including {}'.format(self.version,
+                ', '.join(self.attacks_to_run)))
+        
+        l_attacks = self.attacks_to_run
+        adv = {}
+        verbose_indiv = self.verbose
+        self.verbose = False
+        
+        for c in l_attacks:
+            startt = time.time()
+            self.attacks_to_run = [c]
+            x_adv, y_adv = self.run_standard_evaluation(x_orig, y_orig, bs=bs, return_labels=True)
+            if return_labels:
+                adv[c] = (x_adv, y_adv)
+            else:
+                adv[c] = x_adv
+            if verbose_indiv:    
+                acc_indiv  = self.clean_accuracy(x_adv, y_orig, bs=bs)
+                space = '\t \t' if c == 'fab' else '\t'
+                self.logger.log('robust accuracy by {} {} {:.2%} \t (time attack: {:.1f} s)'.format(
+                    c.upper(), space, acc_indiv,  time.time() - startt))
+        
+        return adv
+        
     def set_version(self, version='standard'):
         if self.verbose:
             print('setting parameters for {} version'.format(version))
-
+        
         if version == 'standard':
             self.attacks_to_run = ['apgd-ce', 'apgd-t', 'fab-t', 'square']
-            self.apgd.n_restarts = 1
-            self.apgd_targeted.n_target_classes = 9
+            if self.norm in ['Linf', 'L2']:
+                self.apgd.n_restarts = 1
+                self.apgd_targeted.n_target_classes = 9
+            elif self.norm in ['L1']:
+                self.apgd.use_largereps = True
+                self.apgd_targeted.use_largereps = True
+                self.apgd.n_restarts = 5
+                self.apgd_targeted.n_target_classes = 5
             self.fab.n_restarts = 1
             self.apgd_targeted.n_restarts = 1
             self.fab.n_target_classes = 9
+            #self.apgd_targeted.n_target_classes = 9
             self.square.n_queries = 5000
-
+        
+        elif version == 'plus':
+            self.attacks_to_run = ['apgd-ce', 'apgd-dlr', 'fab', 'square', 'apgd-t', 'fab-t']
+            self.apgd.n_restarts = 5
+            self.fab.n_restarts = 5
+            self.apgd_targeted.n_restarts = 1
+            self.fab.n_target_classes = 9
+            self.apgd_targeted.n_target_classes = 9
+            self.square.n_queries = 5000
+            if not self.norm in ['Linf', 'L2']:
+                print('"{}" version is used with {} norm: please check'.format(
+                    version, self.norm))
+        
         elif version == 'rand':
             self.attacks_to_run = ['apgd-ce', 'apgd-dlr']
             self.apgd.n_restarts = 1
             self.apgd.eot_iter = 20
+

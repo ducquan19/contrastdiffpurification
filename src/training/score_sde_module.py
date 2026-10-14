@@ -6,10 +6,10 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 
-import src.models.score_sde.losses as losses
-import src.models.score_sde.sampling as sampling
-from src.models.score_sde import sde_lib
-from src.models.score_sde.models import utils as mutils
+import score_sde.losses as losses
+import score_sde.sampling as sampling
+from score_sde import sde_lib
+from score_sde.models import utils as mutils
 
 from src.config import ConfigMain
 

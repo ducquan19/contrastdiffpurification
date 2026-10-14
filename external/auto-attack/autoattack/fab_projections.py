@@ -112,3 +112,51 @@ def projection_l2(points_to_project, w_hyperplane, b_hyperplane):
         d[c2] = d[c2] * c5 - alpha.unsqueeze(-1) * w[c2] * (1 - c5)
 
     return d * (w.abs() > 1e-8).float()
+
+
+def projection_l1(points_to_project, w_hyperplane, b_hyperplane):
+    device = points_to_project.device
+    t, w, b = points_to_project, w_hyperplane.clone(), b_hyperplane
+
+    c = (w * t).sum(1) - b
+    ind2 = 2 * (c >= 0) - 1
+    w.mul_(ind2.unsqueeze(1))
+    c.mul_(ind2)
+
+    r = (1 / w).abs().clamp_max(1e12)
+    indr = torch.argsort(r, dim=1)
+    indr_rev = torch.argsort(indr)
+
+    c6 = (w < 0).float()
+    d = (-t + c6) * (w != 0).float()
+    ds = torch.min(-w * t, w * (1 - t)).gather(1, indr)
+    ds2 = torch.cat((c.unsqueeze(-1), ds), 1)
+    s = torch.cumsum(ds2, dim=1)
+
+    c2 = s[:, -1] < 0
+
+    lb = torch.zeros(c2.sum(), device=device)
+    ub = torch.full_like(lb, s.shape[1])
+    nitermax = math.ceil(math.log2(w.shape[1]))
+
+    s_ = s[c2]
+    for counter in range(nitermax):
+        counter4 = torch.floor((lb + ub) / 2)
+        counter2 = counter4.long().unsqueeze(1)
+        c3 = s_.gather(1, counter2).squeeze(1) > 0
+        lb = torch.where(c3, counter4, lb)
+        ub = torch.where(c3, ub, counter4)
+
+    lb2 = lb.long()
+
+    if c2.any():
+        indr = indr[c2].gather(1, lb2.unsqueeze(1)).squeeze(1)
+        u = torch.arange(0, w.shape[0], device=device).unsqueeze(1)
+        u2 = torch.arange(0, w.shape[1], device=device, dtype=torch.float).unsqueeze(0)
+        alpha = -s[c2, lb2] / w[c2, indr]
+        c5 = u2 < lb.unsqueeze(-1)
+        u3 = c5[u[:c5.shape[0]], indr_rev[c2]]
+        d[c2] = d[c2] * u3.float()
+        d[c2, indr] = alpha
+
+    return d * (w.abs() > 1e-8).float()

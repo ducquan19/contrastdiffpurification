@@ -5,7 +5,7 @@ A config file in ``configs/`` (e.g. ``cifar10.yml``) has five sections -- ``data
 required: ``load_config`` raises ``ValueError`` listing every missing or unknown key, with the
 file and section it belongs to.
 
-The schema holds exactly the keys read by ``src`` (including ``src/models/score_sde``) and ``scripts``.
+The schema holds exactly the keys read by ``external/score_sde``, ``src`` and ``scripts``.
 ``data.channels`` and ``model.num_classes`` are not part of it: only NCSNv2 and the
 ``InstanceNorm++`` normalization read them, and the models here are NCSN++ with GroupNorm.
 """

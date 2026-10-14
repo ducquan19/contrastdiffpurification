@@ -1,8 +1,9 @@
 import torch
 import warnings
+import math
 import sys
 
-from .other_utils import L2_norm
+from autoattack.other_utils import L2_norm
 
 
 funcs = {'grad': 0,
@@ -11,7 +12,7 @@ funcs = {'grad': 0,
     '_make_grads': 0,
     }
 
-checks_doc_path = 'https://github.com/fra31/auto-attack/blob/master/flags_doc.md'
+checks_doc_path = 'flags_doc.md'
 
 
 def check_randomized(model, x, y, bs=250, n=5, alpha=1e-4, logger=None):
@@ -91,15 +92,20 @@ def tracefunc(frame, event, args):
         funcs[frame.f_code.co_name] += 1
 
         
-def check_dynamic(model, x, logger=None):
-    msg = None
-    sys.settrace(tracefunc)
-    model(x)
-    sys.settrace(None)
-    if any([c > 0 for c in funcs.values()]):
-        msg = 'it seems to be a dynamic defense! The evaluation' + \
-            ' with AutoAttack might be insufficient.' + \
-            f' See {checks_doc_path} for details.'
+def check_dynamic(model, x, is_tf_model=False, logger=None):
+    if is_tf_model:
+        msg = 'the check for dynamic defenses is not currently supported'
+    else:
+        msg = None
+        sys.settrace(tracefunc)
+        model(x)
+        sys.settrace(None)
+        #for k, v in funcs.items():
+        #    print(k, v)
+        if any([c > 0 for c in funcs.values()]):
+            msg = 'it seems to be a dynamic defense! The evaluation' + \
+                ' with AutoAttack might be insufficient.' + \
+                f' See {checks_doc_path} for details.'
     if not msg is None:
         if logger is None:
             warnings.warn(Warning(msg))

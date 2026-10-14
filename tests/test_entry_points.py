@@ -1,6 +1,6 @@
 """Import and argument-parsing smoke tests for the entry points.
 
-Needs the full environment (torchvision, torchsde, torchattacks, robustbench, ...);
+Needs the full environment (torchvision, torchsde, torchattacks, autoattack, robustbench, score_sde, ...);
 skipped otherwise. No GPU, data or checkpoints are needed.
 """
 import re
@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-for mod in ("torchvision", "torchsde", "torchdiffeq", "torchattacks", "robustbench", "timm"):
+for mod in ("torchvision", "torchsde", "torchdiffeq", "torchattacks", "autoattack", "robustbench",
+            "timm", "score_sde"):
     pytest.importorskip(mod)
 
 

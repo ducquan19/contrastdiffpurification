@@ -16,7 +16,7 @@ import time
 
 import torch
 import torchattacks
-from src.attacks.autoattack import AutoAttack
+from autoattack import AutoAttack
 
 from src.evaluation.metrics import get_accuracy
 from src.evaluation.purified_model import UndefendedClassifier

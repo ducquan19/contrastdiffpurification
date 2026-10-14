@@ -12,6 +12,8 @@ git+https://github.com/RobustBench/robustbench.git
 torchattacks
 six
 matplotlib
+# AutoAttack and score_sde: pip install ./external/auto-attack ; score_sde is built on a GPU node,
+# see experiments/slurm/build_score_sde.sh
 
 pandas
 Pillow

@@ -6,9 +6,10 @@ Trang này nói rõ thứ gì nên đặt ở đâu khi bạn mở rộng code n
 
 * **`src/` là code nghiên cứu.** Import bằng `from src.… import …` (chạy từ thư mục gốc của repo,
   hoặc `pip install -e .`).
-* **`src/attacks/` và `src/models/score_sde/` là code thượng nguồn** (AutoAttack, BPDA, StAdv,
-  score_sde), mỗi thư mục kèm file license riêng. Thay đổi đã có: import tương đối, `state_path`
-  của AutoAttack, và CUDA op của score_sde biên dịch khi dùng lần đầu. Ngoài ra không sửa chúng. Nếu buộc phải sửa, hãy ghi lại trong file này, vì đó là thay đổi định nghĩa của
+* **`external/` và `src/attacks/` là code thượng nguồn.** `external/auto-attack` và
+  `external/score_sde` được cài bằng pip thành package `autoattack` / `score_sde` và giữ nguyên như
+  bản phát hành (AutoAttack có thêm `state_path`); `src/attacks/` (BPDA, StAdv) đã được rút gọn còn
+  phần thực sự dùng. Không sửa chúng thêm. Nếu buộc phải sửa, hãy ghi lại trong file này, vì đó là thay đổi định nghĩa của
   attack hoặc của model.
 * **Không dùng đường dẫn phụ thuộc thư mục làm việc.** Dùng `src.paths` (`data_path`,
   `pretrained_path`, `output_path`, `config_path`).

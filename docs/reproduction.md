@@ -15,6 +15,8 @@
 conda create -n cdp python=3.10 -y && conda activate cdp
 pip install torch torchvision            # chọn bản CUDA khớp driver của bạn
 pip install -r requirements.txt
+pip install ./external/auto-attack       # AutoAttack đi kèm (hỗ trợ state_path để chạy tiếp)
+pip install --no-build-isolation ./external/score_sde   # biên dịch CUDA op của score_sde (trên máy có GPU + nvcc)
 pip install -e .                         # không bắt buộc: giúp `import src` chạy từ mọi thư mục
 ```
 
@@ -22,12 +24,11 @@ Kiểm tra cài đặt:
 
 ```bash
 python -m pytest tests -q                # chỉ CPU; test điểm vào sẽ chạy khi có đủ dependency
-python -c "import src.models.score_sde, src.attacks.autoattack, torchsde, torchdiffeq, torchattacks, robustbench; print('ok')"
+python -c "import score_sde, autoattack, torchsde, torchdiffeq, torchattacks, robustbench; print('ok')"
 ```
 
-AutoAttack và score_sde nằm sẵn trong `src/` nên không cần cài riêng. Hai CUDA op của score_sde
-(`src/models/score_sde/op/`) được biên dịch tự động ở lần đầu chạy trên GPU (cần nvcc + Ninja;
-kết quả được cache trong `~/.cache/torch_extensions`); trên CPU code dùng bản PyTorch thuần.
+`setup.py` của score_sde chỉ biên dịch CUDA op khi thấy GPU; build trên máy không có GPU sẽ khiến
+`import score_sde` lỗi. Trên cụm Slurm, dùng `experiments/slurm/build_score_sde.sh` qua `srun`.
 
 ## 2. Checkpoint (`pretrained/`)
 

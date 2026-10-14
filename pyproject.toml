@@ -7,13 +7,13 @@ name = "contrastdiffpure"
 version = "0.1.0"
 description = "Contrastive-guided diffusion purification (research code, CIFAR-10 experiments)"
 requires-python = ">=3.9"
-# Runtime dependencies are listed in requirements.txt.
+# Runtime dependencies are listed in requirements.txt; auto-attack and score_sde are installed
+# from external/ (see experiments/slurm/README.md).
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src", "src.*"]
 
-# C++/CUDA sources of score_sde's ops (compiled on first use) and the upstream license files
+# upstream license files of the attacks bundled in src/attacks
 [tool.setuptools.package-data]
-"src.models.score_sde.op" = ["*.cpp", "*.cu"]
-"*" = ["LICENSE*", "*.md"]
+"*" = ["LICENSE*"]

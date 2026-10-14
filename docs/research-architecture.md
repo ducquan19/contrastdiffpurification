@@ -147,7 +147,7 @@ Config được nạp và kiểm tra bởi [src/config.py](../src/config.py); xe
 
 | `--attack_version` | hiện thực | file |
 |---|---|---|
-| `rand` | AutoAttack apgd-ce + apgd-dlr kèm EOT (`--eot_iter`) | `src/attacks/autoattack` |
+| `rand` | AutoAttack apgd-ce + apgd-dlr kèm EOT (`--eot_iter`) | `external/auto-attack` |
 | `standard` | AutoAttack apgd-ce, apgd-t, fab-t, square | như trên |
 | `eotpgd` | `torchattacks.EOTPGD(eps, alpha=2/255, steps=10)` | `eval_eotpgd` |
 | `apgd` | `torchattacks.APGD(steps=10)` | `eval_apgd` |
@@ -165,11 +165,11 @@ src/
 ├── guidance/                contrastive.py (★ phương pháp), build.py (bọc score network)
 ├── models/diffusion/        base.py (phần dùng chung), sde.py, ode.py (bộ thanh lọc DiffPure trên score_sde)
 ├── models/classifiers/      get_image_classifier, cifar10_resnet.py
-├── models/score_sde/        score_sde thượng nguồn: NCSN++, sde_lib, losses, sampling, op/ (C++/CUDA)
-├── attacks/                 attack thượng nguồn: autoattack/, bpda_eot/, stadv_eot/
+├── attacks/                 attack thượng nguồn: bpda_eot/, stadv_eot/
 ├── data/                    specs.py (registry dataset), loaders.py (subset đánh giá), gtsrb.py
 ├── evaluation/              purified_model.py, attacks.py, metrics.py, robustness.py
 ├── training/                score_sde_module.py, classifier_module.py
+external/                    package thượng nguồn cài bằng pip: auto-attack/ (autoattack), score_sde/
 ```
 
 Chiều import: `scripts → src.evaluation → {src.models, src.attacks, src.guidance, src.data} → thư viện ngoài`.
