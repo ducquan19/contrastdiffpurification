@@ -21,7 +21,6 @@ for t in 125; do
           --seed $seed \
           --data_seed $data_seed \
           --diffusion_type sde \
-          --score_type score_sde \
           --attack_version rand \
           --eot_iter 20
 

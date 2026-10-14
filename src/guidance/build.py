@@ -18,7 +18,6 @@ def build_contrastive_guidance(config: ContrastiveConfig, model, device=None):
         get_image_classifier(config.classifier).eval(),
         n_classes=config.n_classes,
         embed_lr=config.embed_lr,
-        enable_drift=True,
         drift_min=config.drift_min,
         drift_max=config.drift_max,
         tau_minus=config.tau_minus,

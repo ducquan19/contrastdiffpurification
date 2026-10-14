@@ -101,8 +101,9 @@ Chữ ký hàm được viết rút gọn. "→" là giá trị trả về.
   * `.eval_transform()` → `Resize((S, S)) + ToTensor()`, cho tensor float trong `[0, 1]`. Một
     pipeline duy nhất cho mọi dataset; nó giống hệt từng bit với ba pipeline khác nhau mà code gốc
     dùng (`tests/test_data.py` liên tục kiểm tra điều đó).
-  * `.build_test_set(transform=None)` → toàn bộ tập test (torchvision CIFAR-10/100, hoặc
-    `GTSRBDatasetTest` với `enable_crop=False`).
+  * `.build_split(train, transform=None, root=None)` → toàn bộ tập train hoặc test (torchvision
+    CIFAR-10/100, hoặc `GTSRBDatasetTrain`/`GTSRBDatasetTest` với `enable_crop=False`). Dùng chung
+    cho đánh giá (`train=False`) và hai script huấn luyện.
 * `get_dataset_spec(name)` → spec, tra theo tên chính xác. Không so khớp chuỗi con, nên `cifar100`
   không còn bị `cifar10` che mất.
 
@@ -223,7 +224,7 @@ Cũng trong file này, cho nhánh BPDA:
   5. trả về `delta.grad · guidance_strength`.
   Lưu ý: tham số của classifier không bị đóng băng bằng `requires_grad_(False)`, nên buffer `.grad`
   của chúng tích lũy qua các lần gọi. Không có gì đọc chúng, nhưng chúng tốn bộ nhớ.
-* `ContrastiveGuidedDiffusion.forward(x, t, enable_drift=None)` → đầu ra của score network đã cộng
+* `ContrastiveGuidedDiffusion.forward(x, t)` → đầu ra của score network đã cộng
   guidance. Đây chính là Eq. (8).
   1. `out = model(x, t)` — luôn được tính;
   2. nếu shape của batch thay đổi, cache bị bỏ và counter được reset — lần gọi hiện tại khi đó lại

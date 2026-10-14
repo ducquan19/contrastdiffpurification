@@ -20,7 +20,6 @@ for t in 100; do
           --seed $seed \
           --data_seed $data_seed \
           --diffusion_type sde \
-          --score_type score_sde \
           --attack_version eotpgd \
           --eot_iter 20
 

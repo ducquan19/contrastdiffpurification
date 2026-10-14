@@ -140,22 +140,3 @@ class GTSRBDatasetTest(VisionDataset):
         if self.target_transform is not None:
             label = self.target_transform(label)
         return img, label
-
-
-def build_gtsrb(
-    root: str | Path,
-    train: bool = True,
-    transforms: Callable | None = None,
-    transform: Callable | None = None,
-    target_transform: Callable | None = None,
-    enable_crop: bool = False,
-) -> VisionDataset:
-    """The GTSRB training or test split, following the torchvision dataset signature."""
-    dataset_cls = GTSRBDatasetTrain if train else GTSRBDatasetTest
-    return dataset_cls(
-        root=root,
-        transforms=transforms,
-        transform=transform,
-        target_transform=target_transform,
-        enable_crop=enable_crop,
-    )

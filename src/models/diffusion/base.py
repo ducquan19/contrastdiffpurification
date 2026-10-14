@@ -67,18 +67,17 @@ class VPDynamics(torch.nn.Module):
     Works on flattened images of shape (B, C*H*W), the layout torchsde / torchdiffeq expect.
 
     Args:
-        model: the score network; replaced in place when contrastive guidance is attached.
-        score_type: only ``score_sde`` (an NCSN++ eps-prediction network) is supported.
+        model: the score_sde (NCSN++) eps-prediction network; replaced in place when contrastive
+               guidance is attached.
         beta_min / beta_max: beta(0) and beta(1).
         N: number of discrete steps of the schedule.
         img_shape: (C, H, W) of one image.
     """
 
-    def __init__(self, model, score_type='score_sde', beta_min=0.1, beta_max=20, N=1000,
+    def __init__(self, model, beta_min=0.1, beta_max=20, N=1000,
                  img_shape=(3, 32, 32)):
         super().__init__()
         self.model = model
-        self.score_type = score_type
         self.img_shape = img_shape
 
         self.beta_0 = beta_min
@@ -97,9 +96,6 @@ class VPDynamics(torch.nn.Module):
         """Score ``grad_x log p_t(x)`` of flattened ``x``, returned with the same shape."""
         assert x.ndim == 2 and np.prod(self.img_shape) == x.shape[1], x.shape
         x_img = x.view(-1, *self.img_shape)
-
-        if self.score_type != 'score_sde':
-            raise NotImplementedError(f'Unknown score type: {self.score_type}!')
 
         # the network predicts epsilon; get_score_fn turns it into a score
         sde = sde_lib.VPSDE(beta_min=self.beta_0, beta_max=self.beta_1, N=self.N)
@@ -125,10 +121,10 @@ class DiffusionPurifier(torch.nn.Module):
 
         img_shape = (config.data.num_channels, config.data.image_size, config.data.image_size)
         self.model = load_score_model(config, self.device)
-        self.dynamics = self._build_dynamics(self.model, args.score_type, img_shape).to(self.device)
+        self.dynamics = self._build_dynamics(self.model, img_shape).to(self.device)
         self.betas = self.dynamics.discrete_betas.float().to(self.device)
 
-    def _build_dynamics(self, model, score_type, img_shape) -> VPDynamics:
+    def _build_dynamics(self, model, img_shape) -> VPDynamics:
         raise NotImplementedError
 
     def _integrate(self, x):

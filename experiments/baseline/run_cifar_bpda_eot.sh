@@ -21,7 +21,6 @@ for t in 100; do
           --seed $seed \
           --data_seed $data_seed \
           --diffusion_type sde \
-          --score_type score_sde \
 
       done
     done

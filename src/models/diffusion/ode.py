@@ -46,8 +46,8 @@ class ODEPurifier(DiffusionPurifier):
         self.method = 'euler'
         print(f'method: {self.method}, atol: {self.atol}, rtol: {self.rtol}, step_size: {self.args.step_size}')
 
-    def _build_dynamics(self, model, score_type, img_shape):
-        return VPODE(model=model, score_type=score_type, img_shape=img_shape)
+    def _build_dynamics(self, model, img_shape):
+        return VPODE(model=model, img_shape=img_shape)
 
     def _integrate(self, x):
         t0, t1 = self.args.t / 1000, 1e-5

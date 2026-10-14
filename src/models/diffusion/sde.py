@@ -56,8 +56,8 @@ class SDEPurifier(DiffusionPurifier):
         print(f't: {args.t}, rand_t: {args.rand_t}, t_delta: {args.t_delta}')
         print(f'use_bm: {args.use_bm}')
 
-    def _build_dynamics(self, model, score_type, img_shape):
-        return RevVPSDE(model=model, score_type=score_type, img_shape=img_shape)
+    def _build_dynamics(self, model, img_shape):
+        return RevVPSDE(model=model, img_shape=img_shape)
 
     def _integrate(self, x):
         batch_size = x.shape[0]

@@ -38,12 +38,6 @@ class TreeNode:
         for node_name in path.split('.'):
             current_node = current_node.add_child(node_name)
 
-    def is_one_child(self):
-        return len(self.children) == 1
-
-    def get_one_child(self):
-        return list(self.children.values())[0]
-
     def __str__(self, indent=0, max_indent=-1):
         if max_indent > 0 and indent > max_indent:
             return ''

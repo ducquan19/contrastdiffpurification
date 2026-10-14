@@ -21,7 +21,6 @@ for t in 100; do
           --seed $seed \
           --data_seed $data_seed \
           --diffusion_type sde \
-          --score_type score_sde \
           --contrastive_classifier cifar10-wideresnet-28-10 \
           --contrastive_n_classes 10 \
           --contrastive_embed_lr 0.01 \

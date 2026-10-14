@@ -25,7 +25,6 @@ class DatasetSpec:
     config_file: str          # the score-SDE config in configs/
     root_subdir: str          # location under the data root
     num_channels: int = 3
-    test_split_size: int = 0  # full test split, for reference in logs
 
     @property
     def root(self) -> Path:
@@ -46,28 +45,39 @@ class DatasetSpec:
             transforms.ToTensor(),
         ])
 
-    def build_test_set(self, transform: Callable | None = None) -> Dataset:
-        """The full test split, before the evaluation subset is drawn."""
+    def build_split(
+        self,
+        train: bool,
+        transform: Callable | None = None,
+        root: str | Path | None = None,
+    ) -> Dataset:
+        """The full training or test split.
+
+        ``transform`` defaults to ``eval_transform()`` and ``root`` to ``self.root``. CIFAR is
+        downloaded on first use; GTSRB must already be on disk (scripts/download_gtsrb.sh).
+        """
         import torchvision.datasets
 
         if transform is None:
             transform = self.eval_transform()
+        root = Path(root) if root is not None else self.root
 
         if self.name == "cifar10":
             return torchvision.datasets.CIFAR10(
-                root=str(self.root), train=False, download=True, transform=transform)
+                root=str(root), train=train, download=True, transform=transform)
 
         if self.name == "cifar100":
             return torchvision.datasets.CIFAR100(
-                root=str(self.root), train=False, download=True, transform=transform)
+                root=str(root), train=train, download=True, transform=transform)
 
         if self.name == "gtsrb":
-            from src.data.gtsrb import GTSRBDatasetTest
+            from src.data.gtsrb import GTSRBDatasetTest, GTSRBDatasetTrain
 
+            dataset_cls = GTSRBDatasetTrain if train else GTSRBDatasetTest
             # enable_crop=False keeps the full sign image, as in the original code
-            return GTSRBDatasetTest(root=self.root, transform=transform, enable_crop=False)
+            return dataset_cls(root=root, transform=transform, enable_crop=False)
 
-        raise NotImplementedError(f"no test set builder for dataset '{self.name}'")
+        raise NotImplementedError(f"no dataset builder for '{self.name}'")
 
 
 DATASETS: dict[str, DatasetSpec] = {
@@ -78,8 +88,7 @@ DATASETS: dict[str, DatasetSpec] = {
             num_classes=10,
             image_size=32,
             config_file="cifar10.yml",
-            root_subdir="cifar10",
-            test_split_size=10000
+            root_subdir="cifar10"
         ),
 
         DatasetSpec(
@@ -87,8 +96,7 @@ DATASETS: dict[str, DatasetSpec] = {
             num_classes=100,
             image_size=32,
             config_file="cifar100.yml",
-            root_subdir="cifar100",
-            test_split_size=10000
+            root_subdir="cifar100"
         ),
 
         DatasetSpec(
@@ -96,8 +104,7 @@ DATASETS: dict[str, DatasetSpec] = {
             num_classes=43,
             image_size=32,
             config_file="gtsrb.yml",
-            root_subdir="gtsrb",
-            test_split_size=12630
+            root_subdir="gtsrb"
         ),
     )
 }

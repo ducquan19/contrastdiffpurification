@@ -55,7 +55,7 @@ purifier + classifier, và lưu `x_adv_*.pt`. Sau đó khai báo nó trong phầ
 ## Thêm một dataset
 
 1. Thêm một `DatasetSpec` vào `DATASETS` trong `src/data/specs.py` (tên, số lớp, kích thước ảnh,
-   thư mục dữ liệu, file config) và một nhánh trong `build_test_set` của nó. Đó là tất cả những gì
+   thư mục dữ liệu, file config) và một nhánh trong `build_split` của nó. Đó là tất cả những gì
    `--domain`, bộ nạp subset và plug-in contrastive cần.
 2. Thêm config `configs/<dataset>.yml` với mọi khóa mà schema yêu cầu; `data.dataset` là khóa các
    runner so khớp để chọn checkpoint.

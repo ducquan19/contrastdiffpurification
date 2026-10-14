@@ -7,7 +7,7 @@
 """Small helpers shared by the entry points: stdout/stderr tee logger and a bool CLI type."""
 import sys
 import argparse
-from typing import Any, Optional
+from typing import Optional
 
 
 class Logger(object):
@@ -28,12 +28,6 @@ class Logger(object):
 
         sys.stdout = self
         sys.stderr = self
-
-    def __enter__(self) -> "Logger":
-        return self
-
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        self.close()
 
     def write(self, text: str) -> None:
         """Write text to stdout (and a file) and optionally flush."""

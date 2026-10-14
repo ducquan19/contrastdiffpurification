@@ -9,13 +9,12 @@ import os
 
 import pytorch_lightning as pl
 import torch
-import torchvision.datasets as datasets
 import torchvision.utils
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from src.data.gtsrb import build_gtsrb
-from src.paths import config_path, data_path, output_path
+from src.data.specs import DATASET_NAMES, get_dataset_spec
+from src.paths import config_path, output_path
 from src.config import load_config
 from src.training.score_sde_module import ScoreSDETrain, get_data_scaler
 
@@ -74,13 +73,14 @@ def main():
         "--dataset",
         type=str,
         default="cifar100",
+        choices=DATASET_NAMES,
         help="dataset to train on"
     )
     _args.add_argument(
-        "--dataset_dir",
+        "--data_root",
         type=str,
-        default=data_path("cifar100"),
-        help="directory to dataset"
+        default=None,
+        help="root directory of the dataset (default: its folder under the data root)"
     )
     _args.add_argument(
         "--train_max_epochs",
@@ -127,22 +127,11 @@ def main():
         if main_config.data.centered:
             _transfrom_pip.append(get_data_scaler(True))
 
-        if args.dataset == "cifar100":
-            dataset = datasets.CIFAR100(
-                root=args.dataset_dir,
-                train=True,
-                download=True,
-                transform=transforms.Compose(_transfrom_pip),
-            )
-        elif args.dataset == "gtsrb":
-            dataset = build_gtsrb(
-                root=args.dataset_dir,
-                train=True,
-                transform=transforms.Compose(_transfrom_pip),
-                enable_crop=False,
-            )
-        else:
-            raise NotImplementedError(f"dataset {args.dataset} is not supported")
+        dataset = get_dataset_spec(args.dataset).build_split(
+            train=True,
+            transform=transforms.Compose(_transfrom_pip),
+            root=args.data_root,
+        )
 
         train_dataloader = DataLoader(
             dataset,

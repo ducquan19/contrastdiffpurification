@@ -72,7 +72,7 @@ def load_eval_subset(
     at a different point of the run) changes the diffusion noise drawn afterwards.
     """
     spec = get_dataset_spec(dataset)
-    test_set = spec.build_test_set()
+    test_set = spec.build_split(train=False)
 
     indices = select_subset_indices(
         n_total=len(test_set),

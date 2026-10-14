@@ -11,11 +11,10 @@ import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import ModelCheckpoint
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+from torchvision import transforms
 
-from src.data.gtsrb import build_gtsrb
-from src.data.specs import get_dataset_spec
-from src.paths import data_path, output_path
+from src.data.specs import DATASET_NAMES, get_dataset_spec
+from src.paths import output_path
 from src.training.classifier_module import DMClassifier
 
 
@@ -35,15 +34,6 @@ def build_transform(train: bool):
     return transforms.Compose(steps)
 
 
-def build_dataset(name, root, train, transform):
-    """The CIFAR-100 or GTSRB training / test split."""
-    if name == 'cifar100':
-        return datasets.CIFAR100(root=root, train=train, download=True, transform=transform)
-    if name == 'gtsrb':
-        return build_gtsrb(root=root, train=train, transform=transform)
-    raise NotImplementedError(f"dataset {name} is not supported")
-
-
 def main():
     _args = argparse.ArgumentParser()
     _args.add_argument(
@@ -54,8 +44,8 @@ def main():
     _args.add_argument(
         "--data_root",
         type=str,
-        default=data_path("cifar100"),
-        help="root directory of the dataset"
+        default=None,
+        help="root directory of the dataset (default: its folder under the data root)"
     )
     _args.add_argument(
         "--checkpoint",
@@ -91,6 +81,7 @@ def main():
         "--dataset",
         type=str,
         default="cifar100",
+        choices=DATASET_NAMES,
         help="dataset to train on"
     )
     _args.add_argument(
@@ -121,13 +112,13 @@ def main():
     print(args)
 
     # test mode evaluates without augmentation; training validates with the training transform
+    spec = get_dataset_spec(args.dataset)
     transform = build_transform(train=not args.test_mode)
     if not args.test_mode:
-        train_dataset = build_dataset(
-            args.dataset,
-            args.data_root,
-            True,
-            transform
+        train_dataset = spec.build_split(
+            train=True,
+            transform=transform,
+            root=args.data_root
         )
         train_loader = DataLoader(
             train_dataset,
@@ -136,12 +127,11 @@ def main():
             num_workers=8
         )
 
-    num_classes = get_dataset_spec(args.dataset).num_classes
-    val_dataset = build_dataset(
-        args.dataset,
-        args.data_root,
-        False,
-        transform
+    num_classes = spec.num_classes
+    val_dataset = spec.build_split(
+        train=False,
+        transform=transform,
+        root=args.data_root
     )
     val_loader = DataLoader(
         val_dataset,

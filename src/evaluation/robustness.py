@@ -193,8 +193,6 @@ def _add_common_args(parser, adv_batch_size, num_sub):
                         help="use one fixed noise sample for the forward diffusion")
     parser.add_argument("--diffusion_type", type=str, default='sde', choices=['sde', 'ode'],
                         help="reverse SDE (DiffPure) or probability-flow ODE")
-    parser.add_argument("--score_type", type=str, default='score_sde', choices=['score_sde'],
-                        help="score network type (only score_sde / NCSN++ is supported)")
     parser.add_argument('--step_size', type=float, default=1e-3,
                         help='step size for ODE Euler method')
     parser.add_argument("--use_bm", action='store_true', help="whether to use brownian motion")

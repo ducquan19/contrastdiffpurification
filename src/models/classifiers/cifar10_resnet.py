@@ -135,7 +135,7 @@ class NetworkBlock(nn.Module):
 class WideResNet(nn.Module):
     """ Based on code from https://github.com/yaodongyu/TRADES """
 
-    def __init__(self, depth=28, num_classes=10, widen_factor=10, sub_block1=False, dropRate=0.0, bias_last=True):
+    def __init__(self, depth=28, num_classes=10, widen_factor=10, dropRate=0.0):
         super(WideResNet, self).__init__()
 
         num_input_channels = 3
@@ -152,9 +152,6 @@ class WideResNet(nn.Module):
         self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,padding=1, bias=False)
         # 1st block
         self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate)
-        if sub_block1:
-            # 1st sub-block
-            self.sub_block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate)
         # 2nd block
         self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate)
         # 3rd block
@@ -162,7 +159,7 @@ class WideResNet(nn.Module):
         # global average pooling and classifier
         self.bn1 = nn.BatchNorm2d(nChannels[3])
         self.relu = nn.ReLU(inplace=True)
-        self.fc = nn.Linear(nChannels[3], num_classes, bias=bias_last)
+        self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
 
         for m in self.modules():

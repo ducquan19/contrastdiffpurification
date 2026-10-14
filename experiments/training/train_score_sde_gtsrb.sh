@@ -10,7 +10,7 @@ python -m scripts.train_score_sde \
     --mode "train" \
     --ckpt_root "./outputs/training/gtsrb_ncsnpp" \
     --dataset "gtsrb" \
-    --dataset_dir "./data/gtsrb" \
+    --data_root "./data/gtsrb" \
     --checkpoint "./outputs/training/gtsrb_ncsnpp_score_sde.ckpt" \
     --config_path "./configs/gtsrb.yml" \
     --train_max_epochs 1800 \

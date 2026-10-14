@@ -182,7 +182,6 @@ class ContrastiveGuidedDiffusion(nn.Module):
         classifier: nn.Module,
         n_classes: int,
         embed_lr=1e-2,
-        enable_drift=True,
         drift_min=2,
         drift_max=10000,
         tau_minus: float = 0.1,
@@ -198,7 +197,6 @@ class ContrastiveGuidedDiffusion(nn.Module):
             classifier: frozen backbone whose logits F(.) embeds.
             n_classes: width of the classifier output, i.e. the input width of F(.).
             embed_lr: Adam learning rate of F(.) (``embed_net``).
-            enable_drift: master switch for the guidance.
             drift_min / drift_max: add the guidance only while
                 ``drift_min <= drift_counter < drift_max``, counting calls
                 from 0. The paper guides every step.
@@ -223,7 +221,6 @@ class ContrastiveGuidedDiffusion(nn.Module):
         )
 
         self.xt_cache = None
-        self.enable_drift = enable_drift
 
         self.drift_counter = 0
         self.drift_min = drift_min
@@ -269,12 +266,10 @@ class ContrastiveGuidedDiffusion(nn.Module):
 
         return delta.grad.detach() * self.guidance_strength
 
-    def forward(self, x: torch.Tensor, t, *, enable_drift=None):
+    def forward(self, x: torch.Tensor, t):
         """``model(x, t)`` plus the guidance term, when the current step is inside the window."""
         out = self.model.forward(x, t)
 
-        if enable_drift is None:
-            enable_drift = self.enable_drift
         # a batch of another shape is a new purification run: drop the cached positive view
         if self.xt_cache is not None:
             if self.xt_cache.shape != x.shape:
@@ -282,10 +277,7 @@ class ContrastiveGuidedDiffusion(nn.Module):
                 self.reset_drift_counter()
 
         # the first step has no previous x(t + dt) to contrast with
-        if self.xt_cache is None:
-            enable_drift = False
-
-        if enable_drift and (self.drift_min <= self.drift_counter) and (self.drift_counter < self.drift_max):
+        if self.xt_cache is not None and self.drift_min <= self.drift_counter < self.drift_max:
             delta = self.acquisition_grad(x, self.xt_cache)
             # only the first C channels are eps; models with learned variance output 2C channels
             out[:, 0:x.size(1)] = out[:, 0:x.size(1)] + delta

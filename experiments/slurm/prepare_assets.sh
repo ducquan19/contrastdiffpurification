@@ -18,7 +18,7 @@ from robustbench import load_model
 from src.data.specs import get_dataset_spec
 from src.models.classifiers import ROBUSTBENCH_MODEL_DIR
 
-print("CIFAR-10 test images:", len(get_dataset_spec("cifar10").build_test_set()))
+print("CIFAR-10 test images:", len(get_dataset_spec("cifar10").build_split(train=False)))
 load_model(model_name="Standard", model_dir=ROBUSTBENCH_MODEL_DIR, dataset="cifar10", threat_model="Linf")
 print("RobustBench Standard WRN-28-10 ready in", ROBUSTBENCH_MODEL_DIR)
 EOF
