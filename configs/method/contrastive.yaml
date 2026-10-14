@@ -1,0 +1,32 @@
+# Contrastive guidance: the published hyperparameters.
+#
+# Schema and the mapping to the paper's symbols: src/method.py
+# Values: the CIFAR-10 experiment scripts of the original release, which are the only source --
+# the paper names these hyperparameters (Algorithm 1, Eq. 8-10) but gives no numbers.
+#
+# Override any of them on the command line, e.g. --contrastive_guidance_strength 1000, for a sweep.
+
+# lambda: strength of the contrastive gradient added to the score, Eq. (8)
+guidance_strength: 500
+
+# tau: temperature of the contrastive loss
+temperature: 1.0
+
+# tau^-: assumed probability of observing a class other than the anchor's, Eq. (10)
+tau_minus: 0.1
+
+# beta: concentration parameter controlling the hardness of the negative mining, Eq. (10)
+beta: 1.0
+
+# 'hard' = hard-negative-mining loss (Eq. 10), 'soft' = plain InfoNCE (Eq. 9).
+# Note: 'soft' currently raises a shape error in ContrastiveLoss.
+estimator: hard
+
+# Adam learning rate of the feature extractor F(.), which is trained online on each minibatch
+embed_lr: 0.01
+
+# Reverse steps that receive the guidance: drift_min <= step < drift_max.
+# Not part of the paper, which guides every step; drift_min: 0 keeps the published CIFAR-10
+# setting for the AutoAttack / EOT-PGD scripts.
+drift_min: 0
+drift_max: 100000

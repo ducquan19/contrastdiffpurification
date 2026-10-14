@@ -180,6 +180,13 @@ MNIST_dataset
 
 .DS_Store
 
-src/dataset/** 
-src/pretrained/** 
-src/models/** 
+# Data, checkpoints and results live outside the source tree (see src/paths.py)
+/data/
+/pretrained/
+/outputs/
+tools/runcode_engine/target/
+
+# Legacy locations used before the restructuring (code ran with cwd = src/)
+src/dataset/
+src/pretrained/
+src/exp_*/ 

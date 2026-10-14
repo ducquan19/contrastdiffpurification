@@ -1,0 +1,3 @@
+# shell scripts must keep LF endings to run on the Linux cluster
+*.sh text eol=lf
+*.sbatch text eol=lf
