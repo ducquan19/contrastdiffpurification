@@ -15,12 +15,41 @@ python -m scripts.convert_lightning_checkpoint --ckpt_path=path/to/checkpoint.ck
 
 import argparse
 import logging
+import pickle
+import types
 
 import torch
 
 from src.utils import setup_logging
 
 logger = logging.getLogger(__name__)
+
+# Module that held the config classes when the existing Lightning checkpoints were written.
+LEGACY_CONFIG_MODULE = "basic_config_setting"
+
+
+class CheckpointUnpickler(pickle.Unpickler):
+    """Unpickler that reads config objects pickled under ``LEGACY_CONFIG_MODULE`` from src.config."""
+
+    def find_class(self, module, name):
+        if module == LEGACY_CONFIG_MODULE:
+            module = "src.config"
+        return super().find_class(module, name)
+
+
+# torch.load takes a pickle *module*; this one only swaps in the unpickler above
+checkpoint_pickle = types.ModuleType("checkpoint_pickle")
+checkpoint_pickle.Unpickler = CheckpointUnpickler
+checkpoint_pickle.load = lambda file, **kwargs: CheckpointUnpickler(file, **kwargs).load()
+
+
+def load_lightning_checkpoint(path):
+    """Load a Lightning checkpoint, including one whose hyperparameters are pickled config objects.
+
+    weights_only=False is required to unpickle those objects: only use it on trusted checkpoints.
+    """
+    return torch.load(path, map_location=torch.device('cpu'), pickle_module=checkpoint_pickle,
+                      weights_only=False)
 
 
 class TreeNode:
@@ -88,7 +117,7 @@ def main():
     args = _args.parse_args()
     setup_logging()
 
-    lightning_checkpoint = torch.load(args.ckpt_path, map_location=torch.device('cpu'))
+    lightning_checkpoint = load_lightning_checkpoint(args.ckpt_path)
     try:
         state_dict = lightning_checkpoint['state_dict']  # type: dict
         logger.info("checkpoint keys: %s", list(lightning_checkpoint.keys()))

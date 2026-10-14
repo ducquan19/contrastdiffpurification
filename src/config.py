@@ -12,7 +12,6 @@ The schema holds exactly the keys read by ``external/score_sde``, ``src`` and ``
 
 from dataclasses import dataclass, fields
 from typing import Any, List
-import sys
 
 import yaml
 
@@ -153,8 +152,3 @@ def load_config(name_or_path: str) -> ConfigMain:
         raise ValueError(f"{source}:\n  - " + "\n  - ".join(problems))
 
     return ConfigMain(**{name: _SECTIONS[name](**raw[name]) for name in _SECTIONS})
-
-
-# Existing Lightning checkpoints pickle these config classes under the module name
-# ``basic_config_setting``; the alias lets them be unpickled (scripts/convert_lightning_checkpoint.py).
-sys.modules.setdefault("basic_config_setting", sys.modules[__name__])
