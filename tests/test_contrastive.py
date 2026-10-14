@@ -126,6 +126,21 @@ def test_differentiable_guidance_matches_the_released_values_and_carries_gradien
     assert grads == [False, True]
 
 
+def test_differentiable_guidance_survives_consecutive_purifications_without_the_cache_fix():
+    """The kept cache must not carry the (freed) graph of the previous purification."""
+    torch.manual_seed(0)
+    cg = ContrastiveGuidedDiffusion(ToyEps(), ToyCls().eval(), n_classes=10, drift_min=0,
+                                    temperature=1.0, guidance_strength=500, differentiable=True)
+    for _ in range(2):
+        x = torch.randn(4, 3, 8, 8, requires_grad=True)
+        d = None
+        for k in range(3):
+            out = cg.guidance_delta(x * (1 + 0.01 * k))
+            d = out if out is not None else d
+        torch.autograd.grad(d.pow(2).sum(), x)
+        cg.reset_drift_counter()
+
+
 def test_differentiable_guidance_backpropagates_to_the_input():
     torch.manual_seed(0)
     cg = ContrastiveGuidedDiffusion(ToyEps(), ToyCls().eval(), n_classes=10, drift_min=0,

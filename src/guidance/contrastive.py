@@ -254,6 +254,10 @@ class ContrastiveGuidedDiffusion(nn.Module):
         self.optimizer = torch.optim.Adam(self.embed_net.parameters(), lr=self.embed_lr)
         if self.clear_cache_on_reset:
             self.xt_cache = None
+        elif self.xt_cache is not None:
+            # the released behaviour keeps the value; drop its graph (differentiable mode), which
+            # belongs to the previous purification and is freed after that purification's backward
+            self.xt_cache = self.xt_cache.detach()
 
     def acquisition_grad(self, x: torch.Tensor, x0: torch.Tensor):
         """Return ``lambda * grad_x loss(F(f(x)), F(f(x0)))`` and take one Adam step on F(.).

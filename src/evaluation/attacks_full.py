@@ -181,6 +181,9 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
                 norm, args.adv_eps, args.pgd_steps, step_size, eot, args.pgd_loss, n_batches,
                 shard_i, shard_n)
 
+    clf = get_image_classifier(args.classifier_name).to(device).eval() if args.attack_classifier else None
+    attack_defense = getattr(args, "attack_defense", True)
+
     results = []
     for b in range(shard_i, n_batches, shard_n):
         path = os.path.join(log_dir, f"pgd_full_batch{b:03d}.pt")
@@ -193,8 +196,7 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
         t0 = time.time()
         rec = {"batch": b, "lo": lo, "hi": hi, "y": y.cpu()}
 
-        if args.attack_classifier:
-            clf = get_image_classifier(args.classifier_name).to(device).eval()
+        if clf is not None:
             with torch.no_grad():  # SAFE: scoring
                 rec["clf_clean"] = (clf(x).argmax(1) == y).cpu()
             _, xb, _ = pgd_eot_full(clf, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps,
@@ -203,25 +205,30 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
             with torch.no_grad():  # SAFE: scoring
                 rec["clf_adv"] = (clf(xb).argmax(1) == y).cpu()
 
-        model_.reset_counter()
-        clean, pp_clean = score(model, x, y, args.score_reps, vote_mode)
-        rec["def_clean"] = clean.cpu()
-        rec["particle_pred_clean"] = None if pp_clean is None else pp_clean.cpu()
+        if attack_defense:
+            model_.reset_counter()
+            clean, pp_clean = score(model, x, y, args.score_reps, vote_mode)
+            rec["def_clean"] = clean.cpu()
+            rec["particle_pred_clean"] = None if pp_clean is None else pp_clean.cpu()
 
-        x_last, x_best, broken = pgd_eot_full(
-            model, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps, step_size=step_size,
-            eot_iter=eot, loss=args.pgd_loss, rand_init=args.pgd_random_start)
-        adv, pp_adv = score(model, x_best, y, args.score_reps, vote_mode)
-        rec.update({"def_adv": adv.cpu(), "broken_during_attack": broken.cpu(),
-                    "particle_pred_adv": None if pp_adv is None else pp_adv.cpu(),
-                    "x_adv": x_best.cpu(), "x_last": x_last.cpu(), "seconds": time.time() - t0})
+            x_last, x_best, broken = pgd_eot_full(
+                model, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps, step_size=step_size,
+                eot_iter=eot, loss=args.pgd_loss, rand_init=args.pgd_random_start)
+            adv, pp_adv = score(model, x_best, y, args.score_reps, vote_mode)
+            rec.update({"def_adv": adv.cpu(), "broken_during_attack": broken.cpu(),
+                        "particle_pred_adv": None if pp_adv is None else pp_adv.cpu(),
+                        "x_adv": x_best.cpu(), "x_last": x_last.cpu()})
+        rec["seconds"] = time.time() - t0
         torch.save(rec, path)
-        logger.info("batch %d: clean %.3f, robust %.3f, %.0fs", b, float(clean.mean()), float(adv.mean()),
-                    rec["seconds"])
+        logger.info("batch %d: %s, %.0fs", b, ", ".join(
+            f"{k} {float(rec[k].float().mean()):.3f}" for k in ("clf_clean", "clf_adv", "def_clean", "def_adv")
+            if rec.get(k) is not None), rec["seconds"])
         results.append(rec)
 
     summary = summarize(results, args, norm, step_size, eot)
-    out = os.path.join(log_dir, f"pgd_full_summary_shard{shard_i}of{shard_n}.json")
+    # an unsharded run is complete here; shards are merged later by scripts.summarize_pgd_full
+    name = "pgd_full_summary.json" if shard_n == 1 else f"pgd_full_summary_shard{shard_i}of{shard_n}.json"
+    out = os.path.join(log_dir, name)
     with open(out, "w") as f:
         json.dump(summary, f, indent=2)
     logger.info("pgd_full summary: %s", json.dumps({k: summary[k] for k in ("n", "def_clean", "def_adv")}))

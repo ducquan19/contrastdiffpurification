@@ -9,7 +9,7 @@ reverse process (see src/guidance/memory_bank.py). Run from the repository root 
         --t_values 0,0.025,0.05,0.075,0.1 --n_images 20000
 
 The output path defaults to the ``bank`` entry of configs/method/pcp.yaml (under pretrained/).
-Training images only: the bank must never see the evaluation subset.
+Training images only, and never the held-out validation pool (src/data/loaders.py, VAL_SIZE).
 """
 
 import argparse
@@ -21,6 +21,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from src.config import load_config
+from src.data.loaders import bank_pool_size
 from src.data.specs import DATASET_NAMES, get_dataset_spec
 from src.guidance.encoders import build_feature_encoder
 from src.guidance.memory_bank import build_prototype_bank
@@ -62,7 +63,9 @@ def main():
 
     spec = get_dataset_spec(args.domain)
     train = spec.build_split(train=True)
-    idx = np.random.RandomState(args.seed).choice(len(train), min(args.n_images, len(train)), replace=False)
+    # never the validation pool (--eval_split val), never the test split
+    pool = bank_pool_size(len(train))
+    idx = np.random.RandomState(args.seed).choice(pool, min(args.n_images, pool), replace=False)
     loader = DataLoader(Subset(train, idx.tolist()), batch_size=args.batch_size, shuffle=False, num_workers=4)
     batches = (xb for xb, _ in loader)
 

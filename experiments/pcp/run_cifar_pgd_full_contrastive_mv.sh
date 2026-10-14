@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../.." || exit 1  # run from the repository root
 cuda_index=$1
 SEED1=$2
 SEED2=$3
-SHARD=${4:-0/1}
+SHARD=${4:-${SHARD:-0/1}}   # 4th argument, else the SHARD environment variable (Slurm)
 
 for seed in $SEED1; do
   for data_seed in $SEED2; do

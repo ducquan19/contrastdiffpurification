@@ -96,6 +96,15 @@ def get_image_classifier(classifier_name: str):
     """
     logger.info("classifier: %s", classifier_name)
 
+    # robustbench:<model_name>[:<threat_model>[:<dataset>]] -- any RobustBench model, e.g. an
+    # adversarially trained one (the robust PCP encoder evaluated on its own)
+    if classifier_name.startswith('robustbench:'):
+        parts = classifier_name.split(':')
+        threat_model = parts[2] if len(parts) > 2 else 'Linf'
+        dataset = parts[3] if len(parts) > 3 else 'cifar10'
+        return load_model(model_dir=ROBUSTBENCH_MODEL_DIR, model_name=parts[1], dataset=dataset,
+                          threat_model=threat_model).eval()
+
     # 'cifar100' must be checked before 'cifar10', which is a substring of it
     if 'cifar100' in classifier_name:
         if 'wideresnet-28-10' in classifier_name:

@@ -17,6 +17,24 @@ from torch.utils.data import DataLoader, Subset
 from src.data.specs import get_dataset_spec
 
 EVAL_INDICES_FILE = "eval_indices.json"
+EVAL_SPLITS = ("test", "val")
+
+# The last VAL_SIZE images of the *training* split are held out as a validation pool:
+# ``--eval_split val`` draws the evaluated subset from it (hyperparameter tuning, never on the test
+# set), and the PCP prototype bank never uses it (scripts/build_prototype_bank.py).
+VAL_SIZE = 5000
+
+
+def val_pool_indices(n_train: int) -> np.ndarray:
+    """Training-split indices of the held-out validation pool (the last ``VAL_SIZE`` images)."""
+    if n_train <= VAL_SIZE:
+        raise ValueError(f"training split of {n_train} images is too small for a {VAL_SIZE}-image pool")
+    return np.arange(n_train - VAL_SIZE, n_train)
+
+
+def bank_pool_size(n_train: int) -> int:
+    """Training images (indices ``0 .. n - 1``) that may be used to build the prototype bank."""
+    return n_train - VAL_SIZE
 
 
 def select_subset_indices(
@@ -53,6 +71,7 @@ def load_eval_subset(
     num_sub: int,
     data_seed: int,
     *,
+    split: str = "test",
     log_dir: str | Path | None = None,
     num_workers: int = 4,
 ) -> tuple[torch.Tensor, torch.Tensor, np.ndarray]:
@@ -70,15 +89,28 @@ def load_eval_subset(
 
     The DataLoader consumes the global torch RNG, so changing ``num_workers`` (or calling this
     at a different point of the run) changes the diffusion noise drawn afterwards.
-    """
-    spec = get_dataset_spec(dataset)
-    test_set = spec.build_split(train=False)
 
-    indices = select_subset_indices(
-        n_total=len(test_set),
-        num_sub=num_sub,
-        data_seed=data_seed
-    )
+    ``split='test'`` (default) is the evaluation subset of the published protocol. ``split='val'``
+    draws the subset, with the same rule, from the held-out validation pool of the *training*
+    split (``val_pool_indices``); ``indices`` are then training-split indices. Use it to tune.
+    """
+    if split not in EVAL_SPLITS:
+        raise ValueError(f"unknown split '{split}'; available: {', '.join(EVAL_SPLITS)}")
+    spec = get_dataset_spec(dataset)
+
+    if split == "test":
+        test_set = spec.build_split(train=False)
+        n_pool = len(test_set)
+        indices = select_subset_indices(
+            n_total=len(test_set),
+            num_sub=num_sub,
+            data_seed=data_seed
+        )
+    else:
+        test_set = spec.build_split(train=True)    # the training split; name kept for the code below
+        pool = val_pool_indices(len(test_set))
+        n_pool = len(pool)
+        indices = pool[select_subset_indices(n_total=n_pool, num_sub=num_sub, data_seed=data_seed)]
 
     subset = Subset(test_set, indices.tolist())
 
@@ -100,7 +132,8 @@ def load_eval_subset(
             "dataset": spec.name,
             "num_sub": int(num_sub),
             "data_seed": int(data_seed),
-            "test_split_size": len(test_set),
+            "split": split,
+            ("test_split_size" if split == "test" else "val_pool_size"): n_pool,
             "indices": [int(i) for i in indices],
         }
 
@@ -117,5 +150,6 @@ def load_data(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """``load_eval_subset`` driven by the parsed command line. Returns ``(x, y)``."""
 
-    x_val, y_val, _ = load_eval_subset(args.domain, args.num_sub, args.data_seed, log_dir=log_dir)
+    x_val, y_val, _ = load_eval_subset(args.domain, args.num_sub, args.data_seed,
+                                       split=getattr(args, "eval_split", "test"), log_dir=log_dir)
     return x_val, y_val

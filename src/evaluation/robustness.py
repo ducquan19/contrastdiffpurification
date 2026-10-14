@@ -87,7 +87,10 @@ def _start_run(args, middle_name):
     os.makedirs(log_dir, exist_ok=True)
     args.log_dir = log_dir
 
-    tee = StdoutTee(file_name=f'{log_dir}/log.txt', file_mode="w+", should_flush=True)
+    # concurrent shards of one run share the folder: one log per shard
+    shard = getattr(args, "shard", "0/1")
+    log_name = "log.txt" if shard == "0/1" else f"log_shard{shard.replace('/', 'of')}.txt"
+    tee = StdoutTee(file_name=f'{log_dir}/{log_name}', file_mode="w+", should_flush=True)
     record_run_config(args, log_dir)
     logger.info("run folder: %s", log_dir)
     return log_dir, tee
@@ -222,6 +225,9 @@ def _add_common_args(parser, adv_batch_size, num_sub):
                              "the identity in backward), full = gradients through the adjoint solver")
     parser.add_argument("--shard", type=str, default="0/1",
                         help="pgd_full: evaluate attack batches i, i+n, i+2n, ... (format i/n)")
+    parser.add_argument("--eval_split", type=str, default="test", choices=["test", "val"],
+                        help="test = the published evaluation subset; val = held-out training "
+                             "images (src/data/loaders.py), for hyperparameter tuning")
     parser.add_argument('--step_size', type=float, default=1e-3,
                         help='step size for ODE Euler method')
     parser.add_argument("--use_bm", action='store_true', help="whether to use brownian motion")
@@ -297,6 +303,9 @@ def build_robustness_parser():
                      help='fresh runs of the defense when scoring clean and adversarial accuracy')
     pgd.add_argument('--attack_classifier', type=str2bool, default=True,
                      help='also attack the bare classifier (cheap reference)')
+    pgd.add_argument('--attack_defense', type=str2bool, default=True,
+                     help='attack the purified model (false: only the bare --classifier_name, e.g. '
+                          'a robustbench:<name> encoder on its own)')
     pgd.add_argument('--resume', action='store_true', help='skip attack batches already saved')
     return parser
 

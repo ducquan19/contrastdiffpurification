@@ -103,6 +103,12 @@ def test_particle_agreement():
     assert stats["particle_acc"] == pytest.approx(0.5)
 
 
+def test_validation_pool_is_disjoint_from_the_bank_pool():
+    from src.data.loaders import VAL_SIZE, bank_pool_size, val_pool_indices
+    pool = val_pool_indices(50000)
+    assert len(pool) == VAL_SIZE and pool.min() == bank_pool_size(50000) and pool.max() == 49999
+
+
 def test_wilson_interval():
     lo, hi = wilson_interval(50, 100)
     assert lo < 0.5 < hi and hi - lo == pytest.approx(0.192, abs=0.005)
