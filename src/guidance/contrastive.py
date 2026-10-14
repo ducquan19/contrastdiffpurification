@@ -189,6 +189,8 @@ class ContrastiveGuidedDiffusion(nn.Module):
         temperature: float = 10,
         guidance_strength: float = 5000,
         estimator: Union[Estimator, str] = Estimator.hard,
+        clear_cache_on_reset: bool = False,
+        differentiable: bool = False,
     ):
         """Wrap a score network so that its output carries the contrastive guidance.
 
@@ -202,6 +204,16 @@ class ContrastiveGuidedDiffusion(nn.Module):
                 from 0. The paper guides every step.
             tau_minus, beta, temperature, estimator: contrastive loss, see ContrastiveLoss.
             guidance_strength: lambda in Eq. (8), the scale of the contrastive gradient.
+            clear_cache_on_reset: also drop ``xt_cache`` in ``reset_drift_counter``. The released
+                code keeps it, so the first guided step of a purification uses the last state of
+                the *previous* purification (previous EOT sample / attack step / batch) as its
+                positive view. ``False`` reproduces the release; ``True`` is the fixed baseline.
+            differentiable: compute the guidance with ``create_graph=True`` and without
+                detaching the inputs, so a full-gradient attack sees it (the release detaches
+                ``x``, which hides the guidance from the attacker even when the purifier is
+                differentiated). Only takes effect when the input requires grad. The online Adam
+                step on F(.) uses a copy of its weights, i.e. the attacker treats F(.) as fixed
+                within a step.
 
         The number of negative pairs follows the batch passed to ``forward`` at run time.
         """
@@ -227,16 +239,21 @@ class ContrastiveGuidedDiffusion(nn.Module):
         self.drift_max = drift_max
 
         self.guidance_strength = guidance_strength
+        self.clear_cache_on_reset = clear_cache_on_reset
+        self.differentiable = differentiable
 
     def reset_drift_counter(self):
         """Restart the step counter and re-initialise F(.) and its optimizer.
 
-        ``xt_cache`` is kept; it is dropped automatically when the next batch has another shape.
+        ``xt_cache`` is kept unless ``clear_cache_on_reset``; otherwise it is dropped only when
+        the next batch has another shape (see ``__init__``).
         """
         self.drift_counter = 0
         self.embed_net.reset_parameters()
         del self.optimizer
         self.optimizer = torch.optim.Adam(self.embed_net.parameters(), lr=self.embed_lr)
+        if self.clear_cache_on_reset:
+            self.xt_cache = None
 
     def acquisition_grad(self, x: torch.Tensor, x0: torch.Tensor):
         """Return ``lambda * grad_x loss(F(f(x)), F(f(x0)))`` and take one Adam step on F(.).
@@ -266,23 +283,63 @@ class ContrastiveGuidedDiffusion(nn.Module):
 
         return delta.grad.detach() * self.guidance_strength
 
-    def forward(self, x: torch.Tensor, t):
-        """``model(x, t)`` plus the guidance term, when the current step is inside the window."""
-        out = self.model.forward(x, t)
+    def acquisition_grad_differentiable(self, x: torch.Tensor, x0: torch.Tensor):
+        """``acquisition_grad`` that keeps the autograd graph of ``x`` and ``x0`` (``create_graph``).
 
+        Numerically identical to ``acquisition_grad`` (tests/test_contrastive.py). F(.) is
+        evaluated with a copy of its weights, so the in-place Adam step afterwards does not
+        invalidate the graph an attacker back-propagates through.
+        """
+        from torch.func import functional_call
+
+        # weight copy for the online step; the data path (x, x0) keeps its graph
+        params = {n: p.detach().clone().requires_grad_(True)  # SAFE: weights of F(.), not data
+                  for n, p in self.embed_net.named_parameters()}
+        with torch.enable_grad():
+            _x_0 = functional_call(self.embed_net, params, (self.classifier(x0),))
+            _x_d = functional_call(self.embed_net, params, (self.classifier(x),))
+            loss = self.contrastive_loss(_x_0, _x_d)
+            grads = torch.autograd.grad(loss, [x] + list(params.values()), create_graph=True)
+
+        # one online Adam step on F(.), as in the release
+        self.optimizer.zero_grad(set_to_none=True)
+        for p, g in zip(self.embed_net.parameters(), grads[1:]):
+            p.grad = g.detach()  # SAFE: optimizer state of F(.), not data
+        self.optimizer.step()
+
+        return grads[0] * self.guidance_strength
+
+    def guidance_delta(self, x: torch.Tensor):
+        """The correction of eps for the current step, or ``None``; advances the wrapper's state.
+
+        This is the part of ``forward`` after the score network, exposed so that the particle
+        sampler (``--diffusion_type particle``) can add it to the noise prediction itself.
+        """
         # a batch of another shape is a new purification run: drop the cached positive view
         if self.xt_cache is not None:
             if self.xt_cache.shape != x.shape:
                 self.xt_cache = None
                 self.reset_drift_counter()
 
+        track = self.differentiable and torch.is_grad_enabled() and x.requires_grad
+        delta = None
         # the first step has no previous x(t + dt) to contrast with
         if self.xt_cache is not None and self.drift_min <= self.drift_counter < self.drift_max:
-            delta = self.acquisition_grad(x, self.xt_cache)
-            # only the first C channels are eps; models with learned variance output 2C channels
-            out[:, 0:x.size(1)] = out[:, 0:x.size(1)] + delta
+            if track:
+                delta = self.acquisition_grad_differentiable(x, self.xt_cache)
+            else:
+                delta = self.acquisition_grad(x, self.xt_cache)
 
-        self.xt_cache = x.detach().clone()
+        self.xt_cache = x if track else x.detach().clone()
 
         self.drift_counter += 1
+        return delta
+
+    def forward(self, x: torch.Tensor, t):
+        """``model(x, t)`` plus the guidance term, when the current step is inside the window."""
+        out = self.model.forward(x, t)
+        delta = self.guidance_delta(x)
+        if delta is not None:
+            # only the first C channels are eps; models with learned variance output 2C channels
+            out[:, 0:x.size(1)] = out[:, 0:x.size(1)] + delta
         return out

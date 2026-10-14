@@ -53,6 +53,11 @@ class PurifiedClassifier(nn.Module):
     ``args.diffusion_type`` picks the reverse SDE or the probability-flow ODE, and
     ``args.guidance == 'contrastive'`` wraps the score network with ``ContrastiveGuidedDiffusion``.
     ``counter`` numbers the purified batches (used for logging and image dumps).
+
+    ``args.grad_mode``: ``straight_through`` (default, the released evaluation: the purifier is
+    the identity in the backward pass) or ``full`` (gradients through the adjoint solver). The
+    explicit-loop solver with direct back-propagation is ``--diffusion_type particle``
+    (``src/evaluation/particle_model.py``).
     """
 
     def __init__(self, args, config):
@@ -67,6 +72,13 @@ class PurifiedClassifier(nn.Module):
         if args.diffusion_type not in PURIFIERS:
             raise NotImplementedError(f"unknown diffusion type: {args.diffusion_type}")
         self.runner = PURIFIERS[args.diffusion_type](args, config, device=config.device)
+
+        if args.guidance == "contrastive" and getattr(args, "grad_mode", "straight_through") == "full":
+            # the adjoint solver re-evaluates the drift in the backward pass, which would re-run the
+            # stateful wrapper (step counter, cached positive view, online Adam step on F(.))
+            raise ValueError("--grad_mode full with --guidance contrastive is not supported by the "
+                             "adjoint SDE/ODE solvers; use --diffusion_type particle "
+                             "--contrastive_differentiable true")
 
         if args.guidance == "contrastive":
             self.runner.set_score_model(
@@ -121,6 +133,10 @@ class PurifiedClassifier(nn.Module):
             return self.classifier(x)
         if mode != 'purify_and_classify':
             raise NotImplementedError(f'unknown mode: {mode}')
+
+        if getattr(self.args, "grad_mode", "straight_through") == "full":
+            # gradients flow through the solver (adjoint), as in the DiffPure code
+            return self.classifier((self._purify_centered(x) + 1) * 0.5)
 
         with torch.no_grad():
             w = self._purify_centered(x) - x

@@ -41,9 +41,11 @@ def test_experiment_arguments_parse(script):
     module, *argv = _python_command(script)
     parser = build_bpda_parser() if module == "scripts.eval_bpda" else build_robustness_parser()
     args = parser.parse_args(argv)
-    assert args.guidance in ("none", "contrastive")
-    assert args.diffusion_type in ("sde", "ode")
+    assert args.guidance in ("none", "contrastive", "pcp")
+    assert args.diffusion_type in ("sde", "ode", "particle")
     assert args.domain == "cifar10"
+    if args.guidance == "pcp":
+        assert args.diffusion_type == "particle"
 
 
 @pytest.mark.parametrize("module", ["scripts.eval_robustness", "scripts.eval_bpda", "scripts.train_score_sde",

@@ -1,0 +1,32 @@
+# Particle sampler + Particle-Contrastive Purification (PCP).
+#
+# Schema and meaning of every field: src/method_pcp.py. Override on the command line with
+# --pcp_<field>, e.g. --pcp_n_particles 16 --pcp_rep_strength 0.2.
+# These are STARTING values for the tuning phase (P3 of the plan), not tuned results.
+
+# ---- sampler: shared by every --diffusion_type particle run (DiffPure / ContrastDiffPure / PCP)
+n_particles: 8          # K purifications per image
+steps: 20               # reverse steps from t*/1000 to 1e-5
+solver: ddim            # ddim | em (Euler-Maruyama of the reverse VP-SDE, as DiffPure)
+eta: 1.0                # DDIM stochasticity (1 ~ DDPM ancestral); ignored by em
+checkpoint: eps         # eps: recompute the score network in backward | none
+vote: hard              # hard: majority over K particles (soft-prob tie-break) | soft: mean probability
+
+# ---- PCP guidance: only --guidance pcp
+# Frozen encoder F. Check the RobustBench model name before the first run
+# (python -c "from robustbench.model_zoo import model_dicts"), and report this model's own
+# robust accuracy next to the PCP results.
+encoder: robustbench:Rebuffi2021Fixing_R18_ddpm
+encoder_feature: penultimate
+bank: pcp_banks/cifar10_Rebuffi2021Fixing_R18_ddpm_M500.pt   # under pretrained/, built by scripts/build_prototype_bank.py
+
+sem_strength: 0.1       # ||d_sem|| = 0.1 ||eps|| with scale_mode normalized
+rep_strength: 0.1
+tau_s: 0.1
+tau_t: 0.05
+sem_t_min: 0.1          # L_sem for t in [0.1, 1.0] * t*
+sem_t_max: 1.0
+rep_t_min: 0.5          # L_rep for t in [0.5, 1.0] * t* (early reverse steps)
+rep_t_max: 1.0
+rep_size: 16
+scale_mode: normalized

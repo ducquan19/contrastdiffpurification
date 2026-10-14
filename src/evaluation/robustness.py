@@ -26,13 +26,17 @@ from src.config import load_config
 from src.data.loaders import load_data
 from src.data.specs import DATASET_NAMES
 from src.evaluation.attacks import eval_apgd, eval_autoattack, eval_bpda, eval_eotpgd, eval_stadv
+from src.evaluation.attacks_full import eval_pgd_full
 from src.evaluation.purified_model import PurifiedClassifier
 from src.method import CLI_FIELDS, DEFAULT_METHOD_CONFIG, ESTIMATORS, cli_dest
 from src.method import resolve_contrastive
+from src.method_pcp import add_pcp_args, resolve_pcp
 from src.paths import output_path
 from src.utils import StdoutTee, setup_logging, str2bool
 
-GUIDANCE_CHOICES = ['none', 'contrastive']
+GUIDANCE_CHOICES = ['none', 'contrastive', 'pcp']
+DIFFUSION_CHOICES = ['sde', 'ode', 'particle']
+GRAD_MODES = ['straight_through', 'full']
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,7 @@ ATTACKS = {
     'stadv': eval_stadv,
     'eotpgd': eval_eotpgd,
     'apgd': eval_apgd,
+    'pgd_full': eval_pgd_full,
 }
 
 
@@ -57,6 +62,11 @@ def record_run_config(args, log_dir):
         "contrastive": (
             args.method_config.as_dict()
             if args.method_config is not None
+            else None
+        ),
+        "pcp": (
+            args.pcp_config.as_dict()
+            if getattr(args, "pcp_config", None) is not None
             else None
         ),
     }
@@ -86,6 +96,14 @@ def _start_run(args, middle_name):
 def _build_model(args, config, ngpus):
     """The purified classifier in eval mode, wrapped in ``DataParallel`` on several GPUs."""
     logger.info("building the purified model")
+    if args.diffusion_type == "particle":
+        if ngpus > 1:
+            # per-image RNG and the sampler's bound score function are not DataParallel-safe;
+            # split an evaluation over GPUs with one process per GPU and --shard i/n instead
+            raise ValueError("--diffusion_type particle runs on one GPU per process: set "
+                             "CUDA_VISIBLE_DEVICES to a single GPU and use --shard i/n")
+        from src.evaluation.particle_model import ParticlePurifiedClassifier
+        return ParticlePurifiedClassifier(args, config).eval().to(config.device)
     model = PurifiedClassifier(args, config)
     if ngpus > 1:
         model = torch.nn.DataParallel(model)
@@ -97,8 +115,10 @@ def robustness_eval(args, config):
     contrastive = args.guidance == 'contrastive'
 
     parts = [args.diffusion_type, args.attack_version]
-    if args.attack_version not in ["stadv", "standard", "rand"]:
+    if args.attack_version not in ["stadv", "standard", "rand", "pgd_full"]:
         parts.append(args.attack_type)
+    if args.diffusion_type == "particle":
+        parts.insert(1, args.guidance)
     log_dir, tee = _start_run(args, "_".join(parts))
 
     ngpus = torch.cuda.device_count()
@@ -194,8 +214,14 @@ def _add_common_args(parser, adv_batch_size, num_sub):
                         help="Decide if randomize sampling noise scale")
     parser.add_argument("--fix_rand", type=str2bool, default=False,
                         help="use one fixed noise sample for the forward diffusion")
-    parser.add_argument("--diffusion_type", type=str, default='sde', choices=['sde', 'ode'],
-                        help="reverse SDE (DiffPure) or probability-flow ODE")
+    parser.add_argument("--diffusion_type", type=str, default='sde', choices=DIFFUSION_CHOICES,
+                        help="reverse SDE (DiffPure), probability-flow ODE, or the differentiable "
+                             "K-particle sampler (configured by --pcp_method / --pcp_*)")
+    parser.add_argument("--grad_mode", type=str, default="straight_through", choices=GRAD_MODES,
+                        help="sde/ode only: straight_through = the released evaluation (purifier is "
+                             "the identity in backward), full = gradients through the adjoint solver")
+    parser.add_argument("--shard", type=str, default="0/1",
+                        help="pgd_full: evaluate attack batches i, i+n, i+2n, ... (format i/n)")
     parser.add_argument('--step_size', type=float, default=1e-3,
                         help='step size for ODE Euler method')
     parser.add_argument("--use_bm", action='store_true', help="whether to use brownian motion")
@@ -239,6 +265,14 @@ def _add_contrastive_args(parser):
     parser.add_argument('--contrastive_data_drift', type=int, default=-1,
                         help='developer option: evaluate only the k-th batch of size '
                              '--adv_batch_size (-1 = all)')
+    # evaluation fixes of the released wrapper (not hyperparameters of the method; default off)
+    parser.add_argument('--contrastive_fix_cache', type=str2bool, default=False,
+                        help='drop the cached positive view between purifications (state-leak fix)')
+    parser.add_argument('--contrastive_differentiable', type=str2bool, default=False,
+                        help='keep the guidance in the autograd graph (full-gradient evaluation; '
+                             'needs --diffusion_type particle)')
+
+    add_pcp_args(parser)
 
 
 def build_robustness_parser():
@@ -251,6 +285,19 @@ def build_robustness_parser():
                         help='only used in the output folder name of eotpgd / apgd runs')
     parser.add_argument('--lp_norm', type=str, default='Linf', choices=['Linf', 'L2'])
     parser.add_argument('--attack_version', type=str, default='rand', choices=list(ATTACKS))
+
+    pgd = parser.add_argument_group("full-gradient PGD+EOT (--attack_version pgd_full)")
+    pgd.add_argument('--pgd_steps', type=int, default=200)
+    pgd.add_argument('--pgd_step_size', type=float, default=None,
+                     help='default: 0.007 (Linf) or 2.5*eps/steps (L2)')
+    pgd.add_argument('--pgd_eot_iter', type=int, default=None, help='default: --eot_iter')
+    pgd.add_argument('--pgd_loss', type=str, default='ce', choices=['ce', 'dlr'])
+    pgd.add_argument('--pgd_random_start', type=str2bool, default=True)
+    pgd.add_argument('--score_reps', type=int, default=1,
+                     help='fresh runs of the defense when scoring clean and adversarial accuracy')
+    pgd.add_argument('--attack_classifier', type=str2bool, default=True,
+                     help='also attack the bare classifier (cheap reference)')
+    pgd.add_argument('--resume', action='store_true', help='skip attack batches already saved')
     return parser
 
 
@@ -273,8 +320,17 @@ def setup(args):
         if args.guidance == 'contrastive'
         else None
     )
+    args.pcp_config = resolve_pcp(args) if args.diffusion_type == 'particle' else None
+    if args.guidance == 'pcp' and args.diffusion_type != 'particle':
+        raise ValueError("--guidance pcp needs --diffusion_type particle")
+    if args.contrastive_differentiable and args.diffusion_type != 'particle':
+        raise ValueError("--contrastive_differentiable needs --diffusion_type particle")
 
     setup_logging(args.verbose)
+    if (args.guidance == 'contrastive' and args.diffusion_type == 'particle'
+            and getattr(args, 'attack_version', None) == 'pgd_full' and not args.contrastive_differentiable):
+        logger.warning("pgd_full on ContrastDiffPure without --contrastive_differentiable true: "
+                       "the guidance is hidden from the attacker (released behaviour)")
 
     if not os.path.isabs(args.exp):
         args.exp = os.path.normpath(output_path(args.exp))
