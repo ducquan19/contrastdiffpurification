@@ -1,19 +1,21 @@
 # Chạy thí nghiệm trên cụm Slurm
 
-Các script trong thư mục này tuân theo quy định của server: code, dữ liệu, môi trường conda và mọi
+Các script trong thư mục này tuân theo quy định của server: code, dữ liệu, môi trường Python (venv) và mọi
 cache (kể cả `.cache`) đều nằm dưới `/media/<user>` (hoặc `/media02/<user>`); login node chỉ dùng
 để chuẩn bị và nộp job; chạy thử bằng `srun` trước khi nộp `sbatch` dài.
 
 | File | Chạy ở đâu | Việc |
 |---|---|---|
-| `env.sh` | được các script khác `source` | đường dẫn lưu trữ, chuyển cache khỏi `/home`, kích hoạt conda |
-| `setup_env.sh` | login node, một lần | tạo môi trường conda, cài package, chạy test CPU |
+| `env.sh` | được các script khác `source` | đường dẫn lưu trữ, chuyển cache khỏi `/home`, kích hoạt venv |
+| `setup_env.sh` | login node, một lần | tạo venv từ Python của server, cài package và AutoAttack, chạy test CPU |
+| `build_score_sde.sh` | `srun` trên node GPU, một lần | build và cài `external/score_sde` (biên dịch CUDA op) |
 | `prepare_assets.sh` | login node, một lần | tải CIFAR-10, classifier RobustBench và checkpoint diffusion |
 | `smoke.sbatch` | `sbatch` | chạy thử đầu-cuối trên 4 ảnh, đo thời gian |
 | `run_array.sbatch` | `sbatch` | chạy một script thí nghiệm, mỗi task một cặp (seed, data_seed) |
 
-Chỉ cần driver GPU: các config `cifar10/cifar100/gtsrb` đặt `fir: False`, nên CUDA op biên dịch
-của score_sde không bao giờ được dùng và không cần `nvcc`.
+`external/score_sde` nạp hai CUDA op đã biên dịch ngay khi import, nên phải build nó trên node GPU
+với `nvcc` (cùng major version CUDA với PyTorch). Trên login node `setup.py` không thấy GPU, chỉ
+build phần C++ và `import score_sde` sẽ lỗi.
 
 ## 1. Chuẩn bị (login node)
 
@@ -26,11 +28,22 @@ git checkout refactor/structure
 # xem driver hỗ trợ CUDA bản nào (dòng "CUDA Version"), rồi chọn bản PyTorch không vượt quá nó
 srun --mem=4G --gres=gpu:1 nvidia-smi
 
-TORCH_INDEX=https://download.pytorch.org/whl/cu121 bash experiments/slurm/setup_env.sh
+TORCH_INDEX=https://download.pytorch.org/whl/cu124 bash experiments/slurm/setup_env.sh
 bash experiments/slurm/prepare_assets.sh          # thêm --all cho các script *_rn50* / *_70-16-dp*
+
+# score_sde: build trên node GPU; cần nvcc, ví dụ từ module CUDA của cluster
+module avail cuda                                 # tìm module CUDA 12.x, rồi:
+export CDP_MODULES="cuda/12.4"                    # tên module thật của cluster
+module load $CDP_MODULES
+srun --mem=16G --gres=gpu:1 --cpus-per-task=4 bash experiments/slurm/build_score_sde.sh
 ```
 
 `setup_env.sh` ghi danh sách package vào `logs/env-<ngày>.txt`; giữ file này cùng kết quả.
+
+Môi trường là một venv tạo từ `python3` của server (cần Python ≥ 3.9) tại
+`/media/<user>/envs/cdp`. Muốn dùng Python khác thì đặt `PYTHON=<đường dẫn>`. Nếu Python đó đến
+từ một environment module, hãy `module load` nó trước khi chạy `setup_env.sh` và đặt
+`export CDP_MODULES="<tên module>"` để các job Slurm nạp lại module đó sau `module purge`.
 
 ## 2. Chạy thử
 
