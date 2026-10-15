@@ -11,6 +11,8 @@ Trang này nói rõ thứ gì nên đặt ở đâu khi bạn mở rộng code n
   bản phát hành (AutoAttack có thêm `state_path`); `src/attacks/` (BPDA, StAdv) đã được rút gọn còn
   phần thực sự dùng. Không sửa chúng thêm. Nếu buộc phải sửa, hãy ghi lại trong file này, vì đó là thay đổi định nghĩa của
   attack hoặc của model.
+  * `external/score_sde/setup.py`: thêm `FORCE_CUDA=1` để biên dịch CUDA op khi không thấy GPU
+    (chỉ cần `nvcc`, ví dụ trên login node). Op và model không đổi; mặc định giữ hành vi cũ.
 * **Không dùng đường dẫn phụ thuộc thư mục làm việc.** Dùng `src.paths` (`data_path`,
   `pretrained_path`, `output_path`, `config_path`).
 * **Mỗi dữ kiện chỉ có một nơi ở.** Dữ kiện về dataset nằm trong `src/data/specs.py`; diffusion

@@ -1,8 +1,12 @@
+import os
+
 from setuptools import setup, find_packages
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtension
 import torch
 
-if torch.cuda.is_available():
+# FORCE_CUDA=1 compiles the CUDA ops without a visible GPU (only nvcc is needed), e.g. on a login
+# node; set TORCH_CUDA_ARCH_LIST to the target GPUs (experiments/slurm/build_score_sde.sh).
+if torch.cuda.is_available() or os.environ.get("FORCE_CUDA") == "1":
     ext_modules=[
         CUDAExtension('score_sde.op.fused', [
             'score_sde/op/fused_bias_act.cpp',

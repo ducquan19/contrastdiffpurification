@@ -46,22 +46,37 @@ mkdir -p logs/slurm
 ## 1. Môi trường
 
 ```bash
-# 1a. phiên bản CUDA mà driver của node GPU hỗ trợ (dòng "CUDA Version")
-srun --mem=4G --gres=gpu:1 nvidia-smi
+# 1a. Login node không có driver NVIDIA (không có nvidia-smi), và node GPU không khai báo feature
+#     driver trong Slurm. Không cần chờ một job GPU để xem: wheel PyTorch tự mang CUDA runtime,
+#     và mọi bản cu12x chạy trên driver dòng CUDA 12 (minor version compatibility).
+#     Job GPU đầu tiên (smoke.sbatch, bước 3) sẽ in nvidia-smi và xác nhận.
 
-# 1b. venv + PyTorch + các package (login node, một lần). Chọn TORCH_INDEX không vượt quá CUDA ở trên.
-TORCH_INDEX=https://download.pytorch.org/whl/cu124 bash experiments/slurm/setup_env.sh
+# 1b. venv + PyTorch + các package (login node, một lần), dùng bản cu12x thấp nhất
+TORCH_INDEX=https://download.pytorch.org/whl/cu121 bash experiments/slurm/setup_env.sh
+source experiments/slurm/env.sh && cdp_activate
+python -c "import torch; print(torch.__version__, 'CUDA', torch.version.cuda)"   # phải là 12.x
 
-# 1c. score_sde biên dịch CUDA op nên phải build trên node GPU, với nvcc cùng major version
-module avail cuda
-export CDP_MODULES="cuda/12.4"                    # tên module thật của cụm
-module load $CDP_MODULES
-srun --mem=16G --gres=gpu:1 --cpus-per-task=4 bash experiments/slurm/build_score_sde.sh
+# 1c. build score_sde NGAY TRÊN LOGIN NODE (không cần GPU): login node có CUDA 12.3 tại
+#     /usr/local/cuda (nvcc cùng major 12 với torch). Biên dịch cho V100 (7.0) và A100 (8.0).
+CUDA_HOME=/usr/local/cuda FORCE_CUDA=1 bash experiments/slurm/build_score_sde.sh
 ```
 
+Nếu `smoke.sbatch` ở bước 3 báo driver quá cũ cho CUDA 12 (tức node GPU dùng driver dòng CUDA 11),
+quay lại dùng bộ CUDA 11.8: cài lại torch bản `cu118`, rồi build lại score_sde bằng module
+CUDA 11.8 của cụm:
+
+```bash
+source experiments/slurm/env.sh && cdp_activate
+pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu118
+module load cuda-11.8.0-gcc-11.4.0-cuusula
+CUDA_HOME=$(dirname $(dirname $(which nvcc))) FORCE_CUDA=1 bash experiments/slurm/build_score_sde.sh
+```
+
+Các job Slurm chỉ cần CUDA runtime đi kèm torch, nên không cần đặt `CDP_MODULES` cho chúng.
+
 `setup_env.sh` đã chạy `pytest tests`. Nếu có test của PCP lỗi ở bước này, dừng lại và sửa trước.
-Lưu thêm dòng `export CDP_MODULES=...` vào `~/.bashrc`, hoặc gõ lại mỗi phiên, để các job Slurm nạp
-lại đúng module.
+Nếu `build_score_sde.sh` in cảnh báo "`import score_sde` failed here (no GPU driver?)" thì không sao:
+phần build đã xong, và `smoke.sbatch` sẽ kiểm tra lại trên node GPU.
 
 ## 2. Dữ liệu và checkpoint
 
