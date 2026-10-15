@@ -43,7 +43,7 @@ python -m pip install --upgrade pip
 pip install torch torchvision --index-url "$TORCH_INDEX"
 pip install -r requirements.txt
 pip install ./external/auto-attack
-pip install gdown pytest          # checkpoint download, CPU test suite
+pip install gdown pytest wheel    # checkpoint download, CPU test suite, score_sde build (bdist_wheel)
 
 python -m pytest tests -q -p no:cacheprovider
 python -c "import autoattack, robustbench, torchsde; print('imports ok')"

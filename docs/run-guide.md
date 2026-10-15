@@ -56,9 +56,11 @@ TORCH_INDEX=https://download.pytorch.org/whl/cu121 bash experiments/slurm/setup_
 source experiments/slurm/env.sh && cdp_activate
 python -c "import torch; print(torch.__version__, 'CUDA', torch.version.cuda)"   # phải là 12.x
 
-# 1c. build score_sde NGAY TRÊN LOGIN NODE (không cần GPU): login node có CUDA 12.3 tại
-#     /usr/local/cuda (nvcc cùng major 12 với torch). Biên dịch cho V100 (7.0) và A100 (8.0).
-CUDA_HOME=/usr/local/cuda FORCE_CUDA=1 bash experiments/slurm/build_score_sde.sh
+# 1c. build score_sde NGAY TRÊN LOGIN NODE (không cần GPU). Dùng CUDA 12.3 tại
+#     /usr/local/cuda-12.3 (cùng major 12 với torch cu121). LƯU Ý: /usr/local/cuda trên login01 là
+#     CUDA 11.8, không dùng được với torch cu12x. Biên dịch cho V100 (7.0) và A100 (8.0).
+/usr/local/cuda-12.3/bin/nvcc --version | tail -2                      # phải là release 12.3
+CUDA_HOME=/usr/local/cuda-12.3 FORCE_CUDA=1 bash experiments/slurm/build_score_sde.sh
 ```
 
 Nếu `smoke.sbatch` ở bước 3 báo driver quá cũ cho CUDA 12 (tức node GPU dùng driver dòng CUDA 11),
