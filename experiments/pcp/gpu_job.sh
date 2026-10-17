@@ -12,9 +12,20 @@ gpu_cmd() {
   local name=$1 hours=$2
   shift 2
   mkdir -p logs/slurm
+  # `sbatch --wrap` runs the command with /bin/sh (dash on Ubuntu), which lacks `pipefail` and
+  # `source`; submit a bash script on stdin instead. $* is expanded here, at submission time.
   sbatch --job-name="$name" --nodes=1 --ntasks=1 --gres=gpu:1 --cpus-per-task=4 --mem=32G \
-    --time="${hours}:00:00" --output="logs/slurm/%x-%j.out" \
-    --wrap "set -euo pipefail; source experiments/slurm/env.sh; cdp_module_purge; cdp_activate; $*"
+    --time="${hours}:00:00" --output="logs/slurm/%x-%j.out" <<EOF
+#!/bin/bash
+set -euo pipefail
+cd "$PWD"
+source experiments/slurm/env.sh
+cdp_module_purge
+cdp_activate
+echo "host: \$(hostname)  CUDA_VISIBLE_DEVICES: \${CUDA_VISIBLE_DEVICES:-unset}  start: \$(date)"
+$*
+echo "done: \$(date)"
+EOF
 }
 
 gpu_job() {

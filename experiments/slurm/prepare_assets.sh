@@ -11,6 +11,14 @@ cd "$(dirname "$0")/../.."
 source experiments/slurm/env.sh
 cdp_activate
 
+# gdown (used by RobustBench and fetch_file below) saves cookies to ~/.cache/gdown/cookies.txt
+# without creating the directory. If $HOME is not writable, keep that cache under $CDP_WORK.
+if ! mkdir -p "$HOME/.cache/gdown" 2>/dev/null; then
+  export HOME="$CDP_WORK"
+  mkdir -p "$HOME/.cache/gdown"
+  echo "note: \$HOME not writable; using HOME=$HOME for the gdown cache"
+fi
+
 # CIFAR-10 test split (torchvision) and the RobustBench "Standard" WRN-28-10 classifier
 python - <<'EOF'
 from robustbench import load_model

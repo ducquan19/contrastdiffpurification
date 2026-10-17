@@ -106,7 +106,7 @@ class PrototypeBank(nn.Module):
 
     @classmethod
     def load(cls, path: str, map_location="cpu") -> "PrototypeBank":
-        blob = torch.load(path, map_location=map_location)
+        blob = torch.load(path, map_location=map_location, weights_only=True)  # tensors + plain meta
         bank = cls(blob["prototypes"], blob["t_values"].tolist(), blob.get("meta", {}))
         # the saved prototypes are already unit vectors: keep them bit-exact instead of
         # normalising a second time, so that save/load round trips and fingerprints match
