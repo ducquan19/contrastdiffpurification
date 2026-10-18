@@ -198,11 +198,17 @@ BASE="--config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet
       --num_sub 64 --adv_batch_size 32 --exp ./pilot"
 EPS=0.031373
 
-gpu_job p-diffpure   12 $BASE --guidance none --pcp_n_particles 1 --adv_eps $EPS --pgd_steps 200 --pgd_eot_iter 4 -i diffpure_sp
-gpu_job p-eps1       6  $BASE --guidance none --pcp_n_particles 1 --adv_eps 1    --pgd_steps 50  --pgd_eot_iter 4 -i diffpure_sp_eps1
-gpu_job p-steps100   8  $BASE --guidance none --pcp_n_particles 1 --adv_eps $EPS --pgd_steps 100 --pgd_eot_iter 4 -i diffpure_sp_steps100
-gpu_job p-eot8       16 $BASE --guidance none --pcp_n_particles 1 --adv_eps $EPS --pgd_steps 200 --pgd_eot_iter 8 -i diffpure_sp_eot8
-gpu_job p-pcp        24 $BASE --guidance pcp  --pcp_n_particles 8 --adv_eps $EPS --pgd_steps 200 --pgd_eot_iter 4 -i pcp
+# --time from the A100-40GB calibration (attack throughput ~327 img*NFE/s at large batch,
+# assumed ~230 at an effective batch of 32), plus margin
+gpu_job p-diffpure   4 $BASE --guidance none --pcp_n_particles 1 --adv_eps $EPS --pgd_steps 200 --pgd_eot_iter 4 -i diffpure_sp
+gpu_job p-eps1       2 $BASE --guidance none --pcp_n_particles 1 --adv_eps 1    --pgd_steps 50  --pgd_eot_iter 4 -i diffpure_sp_eps1
+gpu_job p-steps100   2 $BASE --guidance none --pcp_n_particles 1 --adv_eps $EPS --pgd_steps 100 --pgd_eot_iter 4 -i diffpure_sp_steps100
+gpu_job p-eot8       6 $BASE --guidance none --pcp_n_particles 1 --adv_eps $EPS --pgd_steps 200 --pgd_eot_iter 8 -i diffpure_sp_eot8
+
+# PCP probe: 8 images, 10 iterations; measures seconds per batch and peak GPU memory, from which
+# the PCP batch size and the --time of the PCP pilot, tuning and main-table jobs are set
+gpu_job p-pcp-probe  2 ${BASE/--num_sub 64 --adv_batch_size 32/--num_sub 8 --adv_batch_size 8} \
+    --guidance pcp --pcp_n_particles 8 --adv_eps $EPS --pgd_steps 10 --pgd_eot_iter 4 -i pcp_probe
 
 # tham chiếu: đánh giá straight-through của bản phát hành, trên đúng 64 ảnh đó
 SEEDS="121" DATA_SEEDS="0" sbatch --array=0 experiments/slurm/run_array.sbatch experiments/baseline/run_cifar_eotpgd.sh
@@ -224,8 +230,10 @@ Chỉ đi tiếp khi **cả bốn** điều kiện sau đều đạt:
 4. `eot8`: robust accuracy không cao hơn `diffpure_sp` (EOT 4).
 
 Nếu không đạt, attack đang yếu (gradient bị che). Gửi log để tìm nguyên nhân trước khi tốn GPU cho
-các bước sau. Job `pcp` dùng để đo thời gian và bộ nhớ thực của PCP. Nếu hết bộ nhớ GPU, giảm
-`--adv_batch_size` xuống 16 ở mọi bước sau (bao gồm các script trong `experiments/pcp/`).
+các bước sau. Job `pcp_probe` đo thời gian mỗi batch và bộ nhớ GPU đỉnh của PCP (dòng `batch 0: ..., peak GPU mem`).
+Từ đó chọn `--adv_batch_size` cho PCP (số ảnh × K particle phải vừa 40 GB) và `--time` cho các
+bước 7–8. Với K = 8, DiffPure-MV và contrastive-MV nên dùng `--adv_batch_size 16` (batch hiệu dụng 128,
+khoảng 17 GiB khi đo ở bước 4).
 
 ## 7. Tune trên tập validation
 

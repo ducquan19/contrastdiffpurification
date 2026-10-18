@@ -219,10 +219,11 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
                         "particle_pred_adv": None if pp_adv is None else pp_adv.cpu(),
                         "x_adv": x_best.cpu(), "x_last": x_last.cpu()})
         rec["seconds"] = time.time() - t0
+        rec["peak_mem_gib"] = (torch.cuda.max_memory_allocated() / 2 ** 30) if torch.cuda.is_available() else 0.0
         torch.save(rec, path)
-        logger.info("batch %d: %s, %.0fs", b, ", ".join(
+        logger.info("batch %d: %s, %.0fs, peak GPU mem %.1f GiB", b, ", ".join(
             f"{k} {float(rec[k].float().mean()):.3f}" for k in ("clf_clean", "clf_adv", "def_clean", "def_adv")
-            if rec.get(k) is not None), rec["seconds"])
+            if rec.get(k) is not None), rec["seconds"], rec["peak_mem_gib"])
         results.append(rec)
 
     summary = summarize(results, args, norm, step_size, eot)
