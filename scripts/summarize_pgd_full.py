@@ -24,7 +24,7 @@ def main():
     files = sorted(glob.glob(os.path.join(a.run_dir, "pgd_full_batch*.pt")))
     if not files:
         raise SystemExit(f"no pgd_full_batch*.pt in {a.run_dir}")
-    records = [torch.load(f, map_location="cpu") for f in files]
+    records = [torch.load(f, map_location="cpu", weights_only=True) for f in files]
     cfg = json.load(open(os.path.join(a.run_dir, "resolved_config.json")))["args"]
     args = SimpleNamespace(adv_eps=cfg["adv_eps"], pgd_steps=cfg["pgd_steps"], pgd_loss=cfg["pgd_loss"],
                            pgd_random_start=cfg["pgd_random_start"], score_reps=cfg["score_reps"])

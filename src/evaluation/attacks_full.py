@@ -10,10 +10,14 @@ Protocol (following Lee & Kim, ICCV 2023, with per-sample bookkeeping as in Auto
 * ``steps`` iterations; each averages the input gradient over ``eot_iter`` fresh runs of the
   randomized defense (new diffusion noise every run). The loss is CE (or DLR) on the
   differentiable soft vote of the particles (``output_vote='soft'``).
-* An image counts as broken as soon as the EOT-averaged prediction at some iterate is wrong;
-  that iterate is kept as its adversarial example (``x_best``), else the last iterate.
+* The adversarial example kept for each image (``x_best``) is the iterate with the lowest
+  EOT-averaged margin p_y - max_{j != y} p_j, as APGD keeps its best-loss iterate. (Keeping the
+  first iterate whose EOT-averaged prediction is wrong keeps marginal successes that a fresh
+  run of the defense mostly undoes.) ``broken`` records whether that margin ever went below 0.
 * The kept examples are then scored ``score_reps`` times with fresh randomness and the
-  configured vote (``hard`` majority by default); robust accuracy is the mean over reps.
+  configured vote (``hard`` majority by default). Reported: ``def_adv`` (mean over reps),
+  ``def_adv_neval`` (correct in all ``score_reps`` runs, the N-evaluation robustness of
+  DiffHammer) and ``def_adv_worst`` (never broken at any iterate and correct when re-scored).
 
 Every attack batch is saved to ``pgd_full_batch<NNN>.pt`` (adversarial examples, flags,
 per-particle predictions) and skipped on ``--resume``; ``pgd_full_summary.json`` collects the
@@ -98,6 +102,7 @@ def pgd_eot_full(model, x, y, *, norm="Linf", eps=8 / 255, steps=200, step_size=
     x = x.detach().clone()  # SAFE: the clean input is a constant of the attack
     x_adv = random_start(x, eps, norm) if rand_init else x.clone()
     x_best = x_adv.clone()
+    best_margin = torch.full((x.shape[0],), float("inf"), device=x.device)
     broken = torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
 
     for it in range(steps):
@@ -111,10 +116,11 @@ def pgd_eot_full(model, x, y, *, norm="Linf", eps=8 / 255, steps=200, step_size=
             p = F.softmax(logits.detach(), dim=1)  # SAFE: bookkeeping
             prob = p if prob.numel() == 0 else prob + p
         with torch.no_grad():  # SAFE: the PGD update itself
-            wrong = prob.argmax(dim=1) != y
-            newly = wrong & ~broken
-            x_best[newly] = x_adv.detach()[newly]  # SAFE: bookkeeping
-            broken |= wrong
+            margin = eot_margin(prob / eot_iter, y)
+            better = margin < best_margin
+            x_best[better] = x_adv.detach()[better]  # SAFE: bookkeeping
+            best_margin = torch.minimum(best_margin, margin)
+            broken |= prob.argmax(dim=1) != y
             if norm == "Linf":
                 x_new = x_adv + step_size * grad.sign()
             else:
@@ -123,8 +129,14 @@ def pgd_eot_full(model, x, y, *, norm="Linf", eps=8 / 255, steps=200, step_size=
             x_adv = project(x_new, x, eps, norm).detach()  # SAFE: next iterate
         if log_every and (it % log_every == 0 or it == steps - 1):
             logger.info("pgd_full it %d/%d: broken %d/%d", it + 1, steps, int(broken.sum()), len(broken))
-    x_best[~broken] = x_adv[~broken]
     return x_adv, x_best, broken
+
+
+def eot_margin(prob: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """p_y - max_{j != y} p_j of (EOT-averaged) class probabilities; negative = misclassified."""
+    p_y = prob.gather(1, y[:, None]).squeeze(1)
+    other = prob.scatter(1, y[:, None], float("-inf")).max(dim=1).values
+    return p_y - other
 
 
 @torch.no_grad()  # SAFE: scoring only
@@ -241,6 +253,12 @@ def _acc(records, key):
     return _rate(vals)
 
 
+def _all_reps(records, key):
+    """Fraction of images correct in every scoring rep (N-evaluation, N = score_reps)."""
+    vals = [(r[key].float() >= 1 - 1e-6).float() for r in records if r.get(key) is not None]
+    return _rate(vals)
+
+
 def _worst_case(records):
     """Per image: never broken at any PGD iterate (EOT-averaged prediction) AND correct when
     re-scored. Monotone in the attack budget, unlike the re-scored ``def_adv`` alone."""
@@ -267,6 +285,8 @@ def summarize(records, args, norm, step_size, eot):
         "clf_clean": _acc(records, "clf_clean"), "clf_adv": _acc(records, "clf_adv"),
         "def_clean": _acc(records, "def_clean"), "def_adv": _acc(records, "def_adv"),
         "broken_during_attack": _acc(records, "broken_during_attack"),
+        "def_clean_neval": _all_reps(records, "def_clean"),
+        "def_adv_neval": _all_reps(records, "def_adv"),
         "def_adv_worst": _worst_case(records),
     }
     for key in ("particle_pred_clean", "particle_pred_adv"):
