@@ -238,6 +238,18 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
 
 def _acc(records, key):
     vals = [r[key].float() for r in records if r.get(key) is not None]
+    return _rate(vals)
+
+
+def _worst_case(records):
+    """Per image: never broken at any PGD iterate (EOT-averaged prediction) AND correct when
+    re-scored. Monotone in the attack budget, unlike the re-scored ``def_adv`` alone."""
+    vals = [(~r["broken_during_attack"].bool()).float() * r["def_adv"].float() for r in records
+            if r.get("broken_during_attack") is not None and r.get("def_adv") is not None]
+    return _rate(vals)
+
+
+def _rate(vals):
     if not vals:
         return None
     v = torch.cat(vals)
@@ -255,6 +267,7 @@ def summarize(records, args, norm, step_size, eot):
         "clf_clean": _acc(records, "clf_clean"), "clf_adv": _acc(records, "clf_adv"),
         "def_clean": _acc(records, "def_clean"), "def_adv": _acc(records, "def_adv"),
         "broken_during_attack": _acc(records, "broken_during_attack"),
+        "def_adv_worst": _worst_case(records),
     }
     for key in ("particle_pred_clean", "particle_pred_adv"):
         preds = [r[key] for r in records if r.get(key) is not None]

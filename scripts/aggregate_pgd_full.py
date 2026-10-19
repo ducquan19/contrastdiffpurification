@@ -35,11 +35,11 @@ def main():
         # <name>/<classifier>/<diffusion>_<guidance>_pgd_full/seed<S>/data<D>/pgd_full_summary.json
         name, seed = rel[0], rel[-3]
         s = json.load(open(f))
-        r = rows.setdefault(name, {"seeds": [], "n": [], "def_clean": [], "def_adv": [], "clf_adv": [],
-                                   "error_corr_adv": []})
+        r = rows.setdefault(name, {"seeds": [], "n": [], "def_clean": [], "def_adv": [], "def_adv_worst": [],
+                                   "clf_adv": [], "error_corr_adv": []})
         r["seeds"].append(seed)
         r["n"].append(s.get("n"))
-        for k in ("def_clean", "def_adv", "clf_adv"):
+        for k in ("def_clean", "def_adv", "def_adv_worst", "clf_adv"):
             if s.get(k):
                 r[k].append(s[k]["acc"])
         agr = s.get("agreement_adv") or {}
@@ -50,12 +50,13 @@ def main():
         raise SystemExit(f"no pgd_full_summary.json under {a.root}; run scripts.summarize_pgd_full first")
 
     header = ["experiment", "seeds", "images/seed", "clean acc (%)", "robust acc (%)",
-              "classifier robust (%)", "particle error corr. (adv)"]
+              "robust worst-case (%)", "classifier robust (%)", "particle error corr. (adv)"]
     table = []
     for name, r in rows.items():
         corr = f"{statistics.mean(r['error_corr_adv']):.3f}" if r["error_corr_adv"] else "-"
         table.append([name, str(len(r["seeds"])), "/".join(sorted({str(n) for n in r["n"]})),
-                      _fmt(r["def_clean"]), _fmt(r["def_adv"]), _fmt(r["clf_adv"]), corr])
+                      _fmt(r["def_clean"]), _fmt(r["def_adv"]), _fmt(r["def_adv_worst"]),
+                      _fmt(r["clf_adv"]), corr])
 
     print("| " + " | ".join(header) + " |")
     print("|" + "---|" * len(header))
