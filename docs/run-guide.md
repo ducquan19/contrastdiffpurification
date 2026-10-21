@@ -244,15 +244,15 @@ source experiments/pcp/gpu_job.sh
 TB="--config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet-28-10 --t 100 --diffusion_type particle --attack_version pgd_full --lp_norm Linf --adv_eps 0.031373 --pgd_steps 50 --pgd_eot_iter 4 --eval_split val --num_sub 256 --seed 121 --data_seed 0 --exp ./tune --score_reps 8 --resume --pcp_n_particles 8"
 
 # two lanes (at most 2 running jobs); one-factor-at-a-time around the default (sem 0.1, rep 0.1)
-export SBATCH_DEPENDENCY=singleton
+export GPU_DEP=singleton   # one running job per lane name
 gpu_job laneA 22 $TB --adv_batch_size 16 --guidance none -i diffpure_mv
-gpu_job laneB 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0.1 -i pcp_s0.1_r0.1
-gpu_job laneA 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.2  --pcp_rep_strength 0.1 -i pcp_s0.2_r0.1
-gpu_job laneB 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.05 --pcp_rep_strength 0.1 -i pcp_s0.05_r0.1
-gpu_job laneA 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0   -i pcp_s0.1_r0
-gpu_job laneB 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0.2 -i pcp_s0.1_r0.2
-gpu_job laneA 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0    --pcp_rep_strength 0.1 -i pcp_s0_r0.1
-unset SBATCH_DEPENDENCY
+gpu_job laneB 26 $TB --adv_batch_size 4 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0.1 -i pcp_s0.1_r0.1
+gpu_job laneA 26 $TB --adv_batch_size 4 --guidance pcp --pcp_sem_strength 0.2  --pcp_rep_strength 0.1 -i pcp_s0.2_r0.1
+gpu_job laneB 26 $TB --adv_batch_size 4 --guidance pcp --pcp_sem_strength 0.05 --pcp_rep_strength 0.1 -i pcp_s0.05_r0.1
+gpu_job laneA 26 $TB --adv_batch_size 4 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0   -i pcp_s0.1_r0
+gpu_job laneB 26 $TB --adv_batch_size 4 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0.2 -i pcp_s0.1_r0.2
+gpu_job laneA 26 $TB --adv_batch_size 4 --guidance pcp --pcp_sem_strength 0    --pcp_rep_strength 0.1 -i pcp_s0_r0.1
+unset GPU_DEP
 
 # after (or during) the runs: paired comparison on the common images, DiffPure-MV as reference
 for d in $(find outputs/tune -name pgd_full_batch000.pt -exec dirname {} \;); do python -m scripts.summarize_pgd_full "$d" > /dev/null; done

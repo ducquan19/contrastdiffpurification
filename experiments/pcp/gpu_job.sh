@@ -7,15 +7,26 @@
 # Each call submits one job (1 GPU, 4 CPUs, 32 GB) that activates the environment of
 # experiments/slurm/env.sh and writes its log to logs/slurm/<name>-<jobid>.out.
 # Arguments must not contain spaces.
+#
+# Optional environment variables (read at submission):
+#   GPU_DEP      passed as --dependency, e.g. GPU_DEP=singleton (one running job per job name,
+#                i.e. a "lane") or GPU_DEP=afterany:12345. Note: sbatch has no SBATCH_DEPENDENCY
+#                input variable, so exporting that has no effect.
+#   GPU_NODE     passed as --nodelist, e.g. GPU_NODE=gpu02
+#   GPU_EXCLUDE  passed as --exclude,  e.g. GPU_EXCLUDE=gpu02,gpu04
 
 gpu_cmd() {
   local name=$1 hours=$2
   shift 2
   mkdir -p logs/slurm
+  local extra=()
+  [ -n "${GPU_DEP:-}" ] && extra+=("--dependency=$GPU_DEP")
+  [ -n "${GPU_NODE:-}" ] && extra+=("--nodelist=$GPU_NODE")
+  [ -n "${GPU_EXCLUDE:-}" ] && extra+=("--exclude=$GPU_EXCLUDE")
   # `sbatch --wrap` runs the command with /bin/sh (dash on Ubuntu), which lacks `pipefail` and
   # `source`; submit a bash script on stdin instead. $* is expanded here, at submission time.
   sbatch --job-name="$name" --nodes=1 --ntasks=1 --gres=gpu:1 --cpus-per-task=4 --mem=32G \
-    --time="${hours}:00:00" --output="logs/slurm/%x-%j.out" <<EOF
+    --time="${hours}:00:00" --output="logs/slurm/%x-%j.out" "${extra[@]}" <<EOF
 #!/bin/bash
 set -euo pipefail
 cd "$PWD"
@@ -23,6 +34,7 @@ source experiments/slurm/env.sh
 cdp_module_purge
 cdp_activate
 echo "host: \$(hostname)  CUDA_VISIBLE_DEVICES: \${CUDA_VISIBLE_DEVICES:-unset}  start: \$(date)"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 $*
 echo "done: \$(date)"
 EOF
