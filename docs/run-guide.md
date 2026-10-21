@@ -241,20 +241,23 @@ khoảng 17 GiB khi đo ở bước 4).
 
 ```bash
 source experiments/pcp/gpu_job.sh
-TBASE="--config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet-28-10 --t 100 \
-       --diffusion_type particle --attack_version pgd_full --lp_norm Linf --adv_eps 0.031373 \
-       --pgd_steps 50 --pgd_eot_iter 4 --eval_split val --num_sub 256 --adv_batch_size 32 \
-       --seed 121 --data_seed 0 --exp ./tune"
+TB="--config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet-28-10 --t 100 --diffusion_type particle --attack_version pgd_full --lp_norm Linf --adv_eps 0.031373 --pgd_steps 50 --pgd_eot_iter 4 --eval_split val --num_sub 256 --seed 121 --data_seed 0 --exp ./tune --score_reps 8 --resume --pcp_n_particles 8"
 
-gpu_job t-diffpure-mv 12 $TBASE --guidance none --pcp_n_particles 8 -i diffpure_mv
-for sem in 0.05 0.1 0.2; do
-  for rep in 0 0.05 0.1 0.2; do
-    gpu_job t-pcp-$sem-$rep 12 $TBASE --guidance pcp --pcp_n_particles 8 \
-        --pcp_sem_strength $sem --pcp_rep_strength $rep -i pcp_sem${sem}_rep${rep}
-  done
-done
+# two lanes (at most 2 running jobs); one-factor-at-a-time around the default (sem 0.1, rep 0.1)
+export SBATCH_DEPENDENCY=singleton
+gpu_job laneA 22 $TB --adv_batch_size 16 --guidance none -i diffpure_mv
+gpu_job laneB 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0.1 -i pcp_s0.1_r0.1
+gpu_job laneA 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.2  --pcp_rep_strength 0.1 -i pcp_s0.2_r0.1
+gpu_job laneB 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.05 --pcp_rep_strength 0.1 -i pcp_s0.05_r0.1
+gpu_job laneA 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0   -i pcp_s0.1_r0
+gpu_job laneB 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0.1  --pcp_rep_strength 0.2 -i pcp_s0.1_r0.2
+gpu_job laneA 26 $TB --adv_batch_size 8 --guidance pcp --pcp_sem_strength 0    --pcp_rep_strength 0.1 -i pcp_s0_r0.1
+unset SBATCH_DEPENDENCY
 
-python -m scripts.aggregate_pgd_full outputs/tune          # sau khi mọi job xong
+# after (or during) the runs: paired comparison on the common images, DiffPure-MV as reference
+for d in $(find outputs/tune -name pgd_full_batch000.pt -exec dirname {} \;); do python -m scripts.summarize_pgd_full "$d" > /dev/null; done
+python -m scripts.aggregate_pgd_full outputs/tune
+python -m scripts.compare_pgd_full outputs/tune/diffpure_mv outputs/tune/pcp_*
 ```
 
 Vòng thứ hai, quanh cấu hình tốt nhất: `--pcp_n_particles 4`, `--pcp_tau_s 0.2 --pcp_tau_t 0.1`,

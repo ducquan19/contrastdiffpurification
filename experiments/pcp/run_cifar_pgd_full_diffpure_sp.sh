@@ -15,7 +15,7 @@ for seed in $SEED1; do
           --config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet-28-10 \
           --diffusion_type particle --t 100 \
           --attack_version pgd_full --lp_norm Linf --adv_eps 0.031373 \
-          --pgd_steps 200 --pgd_eot_iter 4 --pgd_loss ce --score_reps 8 \
+          --pgd_steps 200 --pgd_eot_iter 32 --pgd_loss ce --score_reps 8 \
           --num_sub 512 --adv_batch_size 32 \
           --seed $seed --data_seed $data_seed --shard $SHARD --resume \
           --pcp_n_particles 1
