@@ -118,6 +118,7 @@ def resolve_contrastive(args) -> ContrastiveConfig:
     resolved = {**config.as_dict(), **{k: v for k, v in overrides.items() if v is not None}}
     if not resolved["n_classes"]:
         resolved["n_classes"] = get_dataset_spec(args.domain).num_classes
+
     if not resolved["classifier"]:
         raise ValueError("--contrastive_classifier is required with --guidance contrastive")
 
