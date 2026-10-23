@@ -2,7 +2,8 @@
 
 import torch
 
-from src.evaluation.attacks_full import _all_reps, _worst_case, eot_margin, pgd_eot_full
+from src.evaluation.attacks_full import (_all_reps, _worst_case, eot_margin, load_transfer_examples,
+                                         pgd_eot_full)
 
 
 class Linear(torch.nn.Module):
@@ -54,3 +55,12 @@ def test_n_eval_and_worst_case_metrics():
     assert _all_reps([rec], "def_adv")["acc"] == 0.5          # images 0 and 3
     assert _all_reps([rec], "def_clean")["acc"] == 0.75
     assert abs(_worst_case([rec])["acc"] - (1.0 + 0.75) / 4) < 1e-6  # image 3 is broken
+
+
+def test_load_transfer_examples_indexes_by_subset_position(tmp_path):
+    for b, lo in enumerate((0, 2)):
+        torch.save({"lo": lo, "y": torch.tensor([lo, lo + 1]), "x_adv": torch.full((2, 3, 4, 4), float(lo))},
+                   tmp_path / f"pgd_full_batch{b:03d}.pt")
+    out = load_transfer_examples(str(tmp_path))
+    assert sorted(out) == [0, 1, 2, 3]
+    assert out[3][1] == 3 and float(out[2][0].mean()) == 2.0

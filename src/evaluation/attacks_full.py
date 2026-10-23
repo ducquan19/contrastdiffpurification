@@ -27,6 +27,7 @@ several single-GPU processes can split one evaluation.
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
@@ -195,6 +196,11 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
 
     clf = get_image_classifier(args.classifier_name).to(device).eval() if args.attack_classifier else None
     attack_defense = getattr(args, "attack_defense", True)
+    transfer = None
+    if getattr(args, "pgd_transfer_from", None):
+        transfer = load_transfer_examples(args.pgd_transfer_from)
+        logger.info("pgd_full: transfer mode, scoring the adversarial examples of %s (%d images); "
+                    "no attack is run on this defense", args.pgd_transfer_from, len(transfer))
 
     results = []
     for b in range(shard_i, n_batches, shard_n):
@@ -223,9 +229,21 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
             rec["def_clean"] = clean.cpu()
             rec["particle_pred_clean"] = None if pp_clean is None else pp_clean.cpu()
 
-            x_last, x_best, broken = pgd_eot_full(
-                model, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps, step_size=step_size,
-                eot_iter=eot, loss=args.pgd_loss, rand_init=args.pgd_random_start)
+            if transfer is not None:
+                idx = list(range(lo, hi))
+                missing = [i for i in idx if i not in transfer]
+                if missing:
+                    raise ValueError(f"transfer source has no adversarial example for images {missing[:5]}...")
+                if any(transfer[i][1] != int(y[i - lo]) for i in idx):
+                    raise ValueError("labels differ from the transfer source: it evaluated another image "
+                                     "subset (use the same --eval_split, --num_sub and --data_seed)")
+                x_best = torch.stack([transfer[i][0] for i in idx]).to(device)
+                x_last = x_best
+                broken = torch.zeros(hi - lo, dtype=torch.bool, device=device)
+            else:
+                x_last, x_best, broken = pgd_eot_full(
+                    model, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps, step_size=step_size,
+                    eot_iter=eot, loss=args.pgd_loss, rand_init=args.pgd_random_start)
             adv, pp_adv = score(model, x_best, y, args.score_reps, vote_mode)
             rec.update({"def_adv": adv.cpu(), "broken_during_attack": broken.cpu(),
                         "particle_pred_adv": None if pp_adv is None else pp_adv.cpu(),
@@ -246,6 +264,26 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
         json.dump(summary, f, indent=2)
     logger.info("pgd_full summary: %s", json.dumps({k: summary[k] for k in ("n", "def_clean", "def_adv")}))
     return summary
+
+
+def load_transfer_examples(run_dir):
+    """{image index: (x_adv, label)} from the ``pgd_full_batch*.pt`` files of another run.
+
+    Used to score a defense on adversarial examples crafted against a different defense (a
+    transfer attack): if those are stronger than the full-gradient attack on the defense itself,
+    the defense's gradients are suspect (gradient masking).
+    """
+    files = sorted(glob.glob(os.path.join(run_dir, "**", "pgd_full_batch*.pt"), recursive=True))
+    if not files:
+        raise FileNotFoundError(f"no pgd_full_batch*.pt under {run_dir}")
+    out = {}
+    for f in files:
+        r = torch.load(f, map_location="cpu", weights_only=True)
+        if r.get("x_adv") is None:
+            continue
+        for i in range(len(r["y"])):
+            out[int(r["lo"]) + i] = (r["x_adv"][i], int(r["y"][i]))
+    return out
 
 
 def _acc(records, key):

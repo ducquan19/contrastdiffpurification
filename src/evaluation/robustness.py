@@ -307,6 +307,9 @@ def build_robustness_parser():
                      help='attack the purified model (false: only the bare --classifier_name, e.g. '
                           'a robustbench:<name> encoder on its own)')
     pgd.add_argument('--resume', action='store_true', help='skip attack batches already saved')
+    pgd.add_argument('--pgd_transfer_from', type=str, default=None,
+                     help='run folder of another pgd_full run: score this defense on its saved '
+                          'adversarial examples instead of attacking it (transfer / masking check)')
     return parser
 
 
