@@ -2,7 +2,8 @@
 
     python -m scripts.compare_pgd_full outputs/eot_sweep/sp_eot4 outputs/eot_sweep/sp_eot8 ...
 
-Each argument is one run (the ``-i`` folder or any folder below it that holds a single run); the
+Each argument is one run (the ``-i`` folder or any folder below it that holds a single run; a run
+with ``--attack_defense false`` is read from its bare-classifier results); the
 batch files ``pgd_full_batch*.pt`` are found recursively, so unfinished or sharded runs work.
 Images are matched by their index in the evaluated subset (``lo`` + position in the batch), so runs
 with different batch sizes or shards line up. On the common images it prints, per run:
@@ -31,10 +32,16 @@ def load_run(root):
     per = {}
     for f in files:
         r = torch.load(f, map_location="cpu", weights_only=True)
-        if r.get("def_adv") is None:
+        if r.get("def_adv") is not None:
+            clean, adv = r["def_clean"].float(), r["def_adv"].float()
+            broken = r["broken_during_attack"].bool()
+        elif r.get("clf_adv") is not None:
+            # --attack_defense false (e.g. a robust classifier on its own): deterministic model,
+            # scored once, so robust = N-eval = worst-case
+            clean, adv = r["clf_clean"].float(), r["clf_adv"].float()
+            broken = ~r["clf_adv"].bool()
+        else:
             continue
-        clean, adv = r["def_clean"].float(), r["def_adv"].float()
-        broken = r["broken_during_attack"].bool()
         for i in range(len(r["y"])):
             c, a = float(clean[i]), float(adv[i])
             per[int(r["lo"]) + i] = {"clean": c, "clean_neval": float(c >= 1 - 1e-6), "robust": a,
