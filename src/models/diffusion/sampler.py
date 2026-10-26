@@ -115,7 +115,9 @@ class Guidance(Protocol):
     Called with keyword arguments only; returns a tensor shaped like ``eps`` (or ``None`` for no
     correction at this step). ``t`` is the continuous time of the step, ``x0_hat`` the Tweedie
     estimate of the clean image (in [-1, 1]) and ``t_star`` the continuous start time of the run.
-    An optional ``reset()`` is called once at the start of every purification.
+    An optional ``reset()`` is called once at the start of every purification, then an optional
+    ``set_reference(x_ref=, seeds=, n_particles=)`` with the purifier input repeated K times (in
+    [-1, 1], with its autograd graph) and the per-image seeds (spectral guidance, docs/srsg.md).
     """
 
     def __call__(self, *, x_t: torch.Tensor, x0_hat: torch.Tensor, eps: torch.Tensor, t: float,
@@ -223,6 +225,8 @@ class ParticleSampler(nn.Module):
         noise = per_sample_noise(seeds, K, self.steps + 1, x.shape[1:], x.device, x.dtype)
         a = discrete_alpha_bar(self.t_star, self.beta_min, self.beta_max)
         xk = x.repeat_interleave(K, dim=0)
+        if self.guidance is not None and hasattr(self.guidance, "set_reference"):
+            self.guidance.set_reference(x_ref=xk, seeds=seeds, n_particles=K)
         x_t = math.sqrt(a) * xk + math.sqrt(1.0 - a) * noise[0]
 
         t_star_c = self.t_star / N_DISCRETE

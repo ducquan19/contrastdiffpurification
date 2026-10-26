@@ -41,7 +41,7 @@ def test_experiment_arguments_parse(script):
     module, *argv = _python_command(script)
     parser = build_bpda_parser() if module == "scripts.eval_bpda" else build_robustness_parser()
     args = parser.parse_args(argv)
-    assert args.guidance in ("none", "contrastive", "pcp")
+    assert args.guidance in ("none", "contrastive", "pcp", "srsg", "freqpure")
     assert args.diffusion_type in ("sde", "ode", "particle")
     assert args.domain == "cifar10"
     if args.guidance == "pcp":

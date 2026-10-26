@@ -93,15 +93,26 @@ def default_step_size(norm: str, eps: float, steps: int) -> float:
 # the attack
 # --------------------------------------------------------------------------------------------
 
+def lowpass_project(x_adv, x, eps: float, norm: str, sigma: float):
+    """Low-frequency PGD constraint: Gaussian low-pass of the perturbation, then the usual ball."""
+    from src.guidance.spectral import gaussian_lowpass
+
+    return project(x + gaussian_lowpass(x_adv - x, sigma), x, eps, norm)
+
+
 def pgd_eot_full(model, x, y, *, norm="Linf", eps=8 / 255, steps=200, step_size=None,
-                 eot_iter=20, loss="ce", rand_init=True, log_every=20):
+                 eot_iter=20, loss="ce", rand_init=True, log_every=20, lowpass_sigma=None):
     """Full-gradient PGD+EOT on one batch; returns ``(x_last, x_best, broken)``.
 
     ``model(x)`` must return logits (the soft vote for particle models) and be differentiable.
+    ``lowpass_sigma`` (cycles per image) turns it into the low-frequency PGD of docs/srsg.md:
+    after every step (and the random start) the perturbation is Gaussian-low-pass filtered.
     """
     step_size = default_step_size(norm, eps, steps) if step_size is None else step_size
     x = x.detach().clone()  # SAFE: the clean input is a constant of the attack
     x_adv = random_start(x, eps, norm) if rand_init else x.clone()
+    if lowpass_sigma:
+        x_adv = lowpass_project(x_adv, x, eps, norm, lowpass_sigma)
     x_best = x_adv.clone()
     best_margin = torch.full((x.shape[0],), float("inf"), device=x.device)
     broken = torch.zeros(x.shape[0], dtype=torch.bool, device=x.device)
@@ -127,7 +138,10 @@ def pgd_eot_full(model, x, y, *, norm="Linf", eps=8 / 255, steps=200, step_size=
             else:
                 gn = grad.flatten(1).norm(dim=1).clamp_min(1e-12).view(-1, 1, 1, 1)
                 x_new = x_adv + step_size * grad / gn
-            x_adv = project(x_new, x, eps, norm).detach()  # SAFE: next iterate
+            x_adv = project(x_new, x, eps, norm)
+            if lowpass_sigma:
+                x_adv = lowpass_project(x_adv, x, eps, norm, lowpass_sigma)
+            x_adv = x_adv.detach()  # SAFE: next iterate
         if log_every and (it % log_every == 0 or it == steps - 1):
             logger.info("pgd_full it %d/%d: broken %d/%d", it + 1, steps, int(broken.sum()), len(broken))
     return x_adv, x_best, broken
@@ -187,12 +201,13 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
     step_size = args.pgd_step_size if args.pgd_step_size is not None else \
         default_step_size(norm, args.adv_eps, args.pgd_steps)
     vote_mode = getattr(getattr(args, "pcp_config", None), "vote", "hard")
+    lowpass_sigma = getattr(args, "pgd_lowpass_sigma", None)
     shard_i, shard_n = _shard(args.shard)
     x_val, y_val = x_val.detach().to(device), y_val.to(device)  # SAFE: inputs
     n_batches = (x_val.shape[0] + adv_batch_size - 1) // adv_batch_size
-    logger.info("pgd_full: %s eps=%.5f steps=%d step=%.5f eot=%d loss=%s, %d batches, shard %d/%d",
-                norm, args.adv_eps, args.pgd_steps, step_size, eot, args.pgd_loss, n_batches,
-                shard_i, shard_n)
+    logger.info("pgd_full: %s eps=%.5f steps=%d step=%.5f eot=%d loss=%s lowpass_sigma=%s, %d batches, "
+                "shard %d/%d", norm, args.adv_eps, args.pgd_steps, step_size, eot, args.pgd_loss,
+                lowpass_sigma, n_batches, shard_i, shard_n)
 
     clf = get_image_classifier(args.classifier_name).to(device).eval() if args.attack_classifier else None
     attack_defense = getattr(args, "attack_defense", True)
@@ -219,7 +234,8 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
                 rec["clf_clean"] = (clf(x).argmax(1) == y).cpu()
             _, xb, _ = pgd_eot_full(clf, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps,
                                     step_size=step_size, eot_iter=1, loss=args.pgd_loss,
-                                    rand_init=args.pgd_random_start, log_every=0)
+                                    rand_init=args.pgd_random_start, log_every=0,
+                                    lowpass_sigma=lowpass_sigma)
             with torch.no_grad():  # SAFE: scoring
                 rec["clf_adv"] = (clf(xb).argmax(1) == y).cpu()
 
@@ -243,7 +259,8 @@ def eval_pgd_full(args, config, model, x_val, y_val, adv_batch_size, log_dir):
             else:
                 x_last, x_best, broken = pgd_eot_full(
                     model, x, y, norm=norm, eps=args.adv_eps, steps=args.pgd_steps, step_size=step_size,
-                    eot_iter=eot, loss=args.pgd_loss, rand_init=args.pgd_random_start)
+                    eot_iter=eot, loss=args.pgd_loss, rand_init=args.pgd_random_start,
+                    lowpass_sigma=lowpass_sigma)
             adv, pp_adv = score(model, x_best, y, args.score_reps, vote_mode)
             rec.update({"def_adv": adv.cpu(), "broken_during_attack": broken.cpu(),
                         "particle_pred_adv": None if pp_adv is None else pp_adv.cpu(),
@@ -319,7 +336,8 @@ def summarize(records, args, norm, step_size, eot):
         "n": sum(len(r["y"]) for r in records),
         "attack": {"norm": norm, "eps": args.adv_eps, "steps": args.pgd_steps, "step_size": step_size,
                    "eot_iter": eot, "loss": args.pgd_loss, "random_start": args.pgd_random_start,
-                   "score_reps": args.score_reps},
+                   "score_reps": args.score_reps,
+                   "lowpass_sigma": getattr(args, "pgd_lowpass_sigma", None)},
         "clf_clean": _acc(records, "clf_clean"), "clf_adv": _acc(records, "clf_adv"),
         "def_clean": _acc(records, "def_clean"), "def_adv": _acc(records, "def_adv"),
         "broken_during_attack": _acc(records, "broken_during_attack"),

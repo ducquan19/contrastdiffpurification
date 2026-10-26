@@ -14,7 +14,9 @@
   ``contrastive``  ContrastDiffPure's guidance (``ContrastiveGuidedDiffusion.guidance_delta``);
                    pass ``--contrastive_differentiable true`` for a full-gradient evaluation and
                    ``--contrastive_fix_cache true`` for the fixed baseline,
-  ``pcp``          Particle-Contrastive guidance (``src/guidance/particle.py``).
+  ``pcp``          Particle-Contrastive guidance (``src/guidance/particle.py``),
+  ``srsg``         Soft Randomized Spectral Guidance (``src/guidance/spectral.py``),
+  ``freqpure``     FreqPure (Pei et al., ICML 2025) on the same sampler (``src/guidance/spectral.py``).
 
 The sampler and guidance hyperparameters come from ``args.pcp_config`` (``src/method_pcp.py``).
 """
@@ -118,6 +120,12 @@ class ParticlePurifiedClassifier(nn.Module):
                 tau_s=c.tau_s, tau_t=c.tau_t, sem_t_min=c.sem_t_min, sem_t_max=c.sem_t_max,
                 rep_t_min=c.rep_t_min, rep_t_max=c.rep_t_max, rep_size=c.rep_size,
                 scale_mode=c.scale_mode)
+        if args.guidance in ("srsg", "freqpure"):
+            from src.guidance.spectral import build_spectral_guidance
+
+            g = build_spectral_guidance(args)
+            logger.info("%s guidance: %s", args.guidance, g.config.as_dict())
+            return g
         raise NotImplementedError(f"unknown guidance '{args.guidance}' for --diffusion_type particle")
 
     def eps_fn(self, x: torch.Tensor, t_vec: torch.Tensor) -> torch.Tensor:

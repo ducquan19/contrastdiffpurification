@@ -31,10 +31,11 @@ from src.evaluation.purified_model import PurifiedClassifier
 from src.method import CLI_FIELDS, DEFAULT_METHOD_CONFIG, ESTIMATORS, cli_dest
 from src.method import resolve_contrastive
 from src.method_pcp import add_pcp_args, resolve_pcp
+from src.guidance.spectral import add_spectral_args
 from src.paths import output_path
 from src.utils import StdoutTee, setup_logging, str2bool
 
-GUIDANCE_CHOICES = ['none', 'contrastive', 'pcp']
+GUIDANCE_CHOICES = ['none', 'contrastive', 'pcp', 'srsg', 'freqpure']
 DIFFUSION_CHOICES = ['sde', 'ode', 'particle']
 GRAD_MODES = ['straight_through', 'full']
 
@@ -225,9 +226,10 @@ def _add_common_args(parser, adv_batch_size, num_sub):
                              "the identity in backward), full = gradients through the adjoint solver")
     parser.add_argument("--shard", type=str, default="0/1",
                         help="pgd_full: evaluate attack batches i, i+n, i+2n, ... (format i/n)")
-    parser.add_argument("--eval_split", type=str, default="test", choices=["test", "val"],
+    parser.add_argument("--eval_split", type=str, default="test", choices=["test", "val", "dev"],
                         help="test = the published evaluation subset; val = held-out training "
-                             "images (src/data/loaders.py), for hyperparameter tuning")
+                             "images; dev = test images outside the 512 reported ones "
+                             "(src/data/loaders.py), for hyperparameter tuning")
     parser.add_argument('--step_size', type=float, default=1e-3,
                         help='step size for ODE Euler method')
     parser.add_argument("--use_bm", action='store_true', help="whether to use brownian motion")
@@ -279,6 +281,7 @@ def _add_contrastive_args(parser):
                              'needs --diffusion_type particle)')
 
     add_pcp_args(parser)
+    add_spectral_args(parser)
 
 
 def build_robustness_parser():
@@ -307,6 +310,9 @@ def build_robustness_parser():
                      help='attack the purified model (false: only the bare --classifier_name, e.g. '
                           'a robustbench:<name> encoder on its own)')
     pgd.add_argument('--resume', action='store_true', help='skip attack batches already saved')
+    pgd.add_argument('--pgd_lowpass_sigma', type=float, default=None,
+                     help='low-frequency PGD: Gaussian low-pass of the perturbation after every step, '
+                          'width in cycles per image (docs/srsg.md, section 3); default off')
     pgd.add_argument('--pgd_transfer_from', type=str, default=None,
                      help='run folder of another pgd_full run: score this defense on its saved '
                           'adversarial examples instead of attacking it (transfer / masking check)')
@@ -333,8 +339,8 @@ def setup(args):
         else None
     )
     args.pcp_config = resolve_pcp(args) if args.diffusion_type == 'particle' else None
-    if args.guidance == 'pcp' and args.diffusion_type != 'particle':
-        raise ValueError("--guidance pcp needs --diffusion_type particle")
+    if args.guidance in ('pcp', 'srsg', 'freqpure') and args.diffusion_type != 'particle':
+        raise ValueError(f"--guidance {args.guidance} needs --diffusion_type particle")
     if args.contrastive_differentiable and args.diffusion_type != 'particle':
         raise ValueError("--contrastive_differentiable needs --diffusion_type particle")
 

@@ -19,6 +19,7 @@ CHECKED = [
     "src/evaluation/particle_model.py",
     "src/evaluation/attacks_full.py",
     "src/evaluation/voting.py",
+    "src/guidance/spectral.py",
 ]
 SUSPICIOUS = {"detach", "detach_", "no_grad", "inference_mode"}
 

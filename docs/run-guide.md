@@ -400,3 +400,46 @@ lỗi; luôn chia bằng `--shard`.
 Các giá trị chưa được xác minh cần kiểm tra trước khi báo cáo số: tên encoder (bước 2b) và step
 size ℓ∞ mặc định 0.007 (`default_step_size` trong `src/evaluation/attacks_full.py`; có thể đặt tường
 minh bằng `--pgd_step_size`).
+
+## 13. Hướng tần số: SRSG, FreqPure và attack tần số thấp
+
+Đặc tả: `docs/srsg.md`. Ba thành phần mới:
+
+| Cờ | Ý nghĩa |
+|---|---|
+| `--guidance srsg` (`--srsg_*`) | Soft Randomized Spectral Guidance |
+| `--guidance freqpure` (`--freqpure_da/dp/delta`) | FreqPure cài lại trên cùng sampler (mặc định D_A = 3, D_P = 2, δ = 0,2) |
+| `--pgd_lowpass_sigma S` | PGD tần số thấp: lọc Gauss nhiễu sau mỗi bước (S chu kỳ/ảnh), vẫn trong quả cầu ℓ∞ |
+| `--eval_split dev` | Ảnh test ngoài 512 ảnh báo cáo; dùng để chọn tham số |
+
+### 13a. Kiểm tra trước (CPU, login node)
+
+```bash
+python -m pytest tests -q          # gồm tests/test_spectral.py
+```
+
+### 13b. Thí nghiệm quyết định: FreqPure và DiffPure dưới PGD thường và PGD tần số thấp
+
+64 ảnh test (`data_seed 0`), 200 vòng, EOT 16 (đã hội tụ cho K = 1). DiffPure dưới PGD thường đã
+có: `outputs/eot_sweep/sp_eot16`.
+
+```bash
+source /media02/lhbac34/cdp.sh && source experiments/pcp/gpu_job.sh
+F="--config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet-28-10 --t 100 --diffusion_type particle --attack_version pgd_full --lp_norm Linf --adv_eps 0.031373 --pgd_steps 200 --pgd_eot_iter 16 --eval_split test --num_sub 64 --seed 121 --data_seed 0 --exp ./freq --score_reps 8 --resume --pcp_n_particles 1 --adv_batch_size 32"
+export GPU_DEP=singleton
+GPU_NODE=gpu02     gpu_job laneA 16 $F --guidance freqpure -i freqpure_pgd
+GPU_NODE=gpu02     gpu_job laneA 16 $F --guidance freqpure --pgd_lowpass_sigma 2 -i freqpure_lf2
+GPU_EXCLUDE=gpu02  gpu_job laneB 24 $F --guidance none     --pgd_lowpass_sigma 2 -i diffpure_lf2
+GPU_EXCLUDE=gpu02  gpu_job laneB 3  $F --guidance none --classifier_name robustbench:Rebuffi2021Fixing_R18_ddpm --attack_defense false --pgd_lowpass_sigma 2 --adv_batch_size 64 -i r18_lf2
+unset GPU_DEP
+```
+
+Đọc kết quả:
+
+```bash
+for d in $(find outputs/freq -name 'pgd_full_batch000.pt' -exec dirname {} \;); do python -m scripts.summarize_pgd_full "$d" > /dev/null; done
+python -m scripts.compare_pgd_full outputs/eot_sweep/sp_eot16 outputs/freq/freqpure_pgd outputs/freq/diffpure_lf2 outputs/freq/freqpure_lf2 outputs/freq/r18_lf2
+```
+
+Giả thuyết cần kiểm tra: FreqPure ≥ DiffPure dưới PGD thường, nhưng FreqPure < DiffPure dưới PGD
+tần số thấp (băng được giữ là lỗ hổng). Nếu đúng, chuyển sang chọn tham số SRSG trên `--eval_split dev`.

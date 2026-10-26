@@ -17,7 +17,13 @@ from torch.utils.data import DataLoader, Subset
 from src.data.specs import get_dataset_spec
 
 EVAL_INDICES_FILE = "eval_indices.json"
-EVAL_SPLITS = ("test", "val")
+EVAL_SPLITS = ("test", "val", "dev")
+
+# ``--eval_split dev`` draws from the *test* images that are NOT in the reported subset (the first
+# REPORT_SIZE images of ``data_seed`` REPORT_SEED), so hyperparameters are chosen on test-distribution
+# images the pretrained models never saw, without touching the images that are reported.
+REPORT_SIZE = 512
+REPORT_SEED = 0
 
 # The last VAL_SIZE images of the *training* split are held out as a validation pool:
 # ``--eval_split val`` draws the evaluated subset from it (hyperparameter tuning, never on the test
@@ -30,6 +36,12 @@ def val_pool_indices(n_train: int) -> np.ndarray:
     if n_train <= VAL_SIZE:
         raise ValueError(f"training split of {n_train} images is too small for a {VAL_SIZE}-image pool")
     return np.arange(n_train - VAL_SIZE, n_train)
+
+
+def dev_pool_indices(n_test: int) -> np.ndarray:
+    """Test indices outside the reported subset (``select_subset_indices(n, REPORT_SIZE, REPORT_SEED)``)."""
+    report = select_subset_indices(n_test, min(REPORT_SIZE, n_test), REPORT_SEED)
+    return np.setdiff1d(np.arange(n_test), report)
 
 
 def bank_pool_size(n_train: int) -> int:
@@ -106,6 +118,11 @@ def load_eval_subset(
             num_sub=num_sub,
             data_seed=data_seed
         )
+    elif split == "dev":
+        test_set = spec.build_split(train=False)
+        pool = dev_pool_indices(len(test_set))
+        n_pool = len(pool)
+        indices = pool[select_subset_indices(n_total=n_pool, num_sub=num_sub, data_seed=data_seed)]
     else:
         test_set = spec.build_split(train=True)    # the training split; name kept for the code below
         pool = val_pool_indices(len(test_set))
@@ -133,7 +150,7 @@ def load_eval_subset(
             "num_sub": int(num_sub),
             "data_seed": int(data_seed),
             "split": split,
-            ("test_split_size" if split == "test" else "val_pool_size"): n_pool,
+            {"test": "test_split_size", "val": "val_pool_size", "dev": "dev_pool_size"}[split]: n_pool,
             "indices": [int(i) for i in indices],
         }
 
