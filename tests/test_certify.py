@@ -292,6 +292,39 @@ def test_main_end_to_end_with_toy_models(tmp_path, monkeypatch, mode):
     assert json.loads((tmp_path / "r" / "summary.json").read_text()) == s
 
 
+def test_compare_dds_paired_statistics(tmp_path, capsys):
+    import json
+
+    from scripts import certify_dds as cd
+    from scripts import compare_dds as cmp
+
+    run = tmp_path / "diag"
+    run.mkdir()
+    (run / "resolved_config_shard0of1.json").write_text(json.dumps({"sigma": 0.5}))
+    n_true = {"onestep": [40, 60, 70], "multistep": [50, 60, 80], "posthoc": [50, 61, 80],
+              "posthoc_rev": [40, 60, 70], "wadds": [60, 70, 90]}
+    rows = [dict(pos=p, idx=p, label=0, variant=v, n=100, n_true=t[p], top_class=0 if t[p] > 50 else 1,
+                 n_top=max(t[p], 100 - t[p])) for v, t in n_true.items() for p in range(3)]
+    _write(run / "diag_shard0of1.tsv", cd.DIAG_FIELDS, rows)
+    v = cmp.load_diag(str(run), 0.5)
+    c = cmp.compare_variants(v["wadds"], v["multistep"])
+    assert c["n"] == 3 and c["d_acc"] == pytest.approx(0.10)
+    assert (c["wins"], c["losses"]) == (1, 0)          # image 0: 60 vs 50 -> only wadds is correct
+    assert c["d_acr"] > 0
+    cmp.main(["diag", str(run)])
+    assert "wadds - multistep" in capsys.readouterr().out
+
+    a, b = tmp_path / "ref", tmp_path / "new"
+    for d, preds in ((a, [(1, 0.2), (-1, 0.0), (1, 0.6)]), (b, [(1, 0.4), (1, 0.3), (1, 0.6)])):
+        d.mkdir()
+        _write(d / "certify_shard0of1.tsv", cd.CERT_FIELDS,
+               [dict(pos=p, idx=p, label=1, predict=pr, correct=int(pr == 1), p_lower=0.9, radius=r,
+                     count_cA=1, seconds=1.0) for p, (pr, r) in enumerate(preds)])
+    cmp.main(["certify", str(a), str(b), "--radii", "0,0.25"])
+    out = capsys.readouterr().out
+    assert "n=3 common images" in out and "W/L=1/0" in out
+
+
 def test_default_run_names_are_distinct():
     from scripts import certify_dds as cd
 

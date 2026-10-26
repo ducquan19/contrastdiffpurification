@@ -31,20 +31,24 @@ $P(f)$ là phổ công suất trung bình của **ảnh train** (45.000 ảnh, k
 | `src/certify/spectrum.py` | $P(f)$, hệ số Wiener, bảng SNR |
 | `scripts/spectral_stats.py` | Tính `pretrained/spectral/cifar10_power.pt` (CPU) |
 | `scripts/certify_dds.py` | `--mode diagnose` (G0) và `--mode certify` |
-| `experiments/wadds/run_cifar10.sh` | Các stage `stats`, `g0`, `dev`, `main`, `summary` trên Slurm |
-| `tests/test_certify.py` | 29 test CPU |
+| `scripts/compare_dds.py` | So sánh ghép cặp theo ảnh: biến thể với biến thể (G0), run với run (certify); bootstrap CI và McNemar |
+| `experiments/wadds/run_cifar10.sh` | Các stage `stats`, `g0`, `dev`, `tune`, `devbase`, `main [method]`, `summary` trên Slurm |
+| `tests/test_certify.py` | 30 test CPU |
 
 ## 3. Chạy trên cluster
 
 ```bash
 source /media02/lhbac34/cdp.sh
 git pull
-python -m pytest tests/test_certify.py -q            # 29 passed
+python -m pytest tests/test_certify.py -q            # 30 passed
 bash experiments/wadds/run_cifar10.sh stats          # login node, khoảng 1 phút
 bash experiments/wadds/run_cifar10.sh g0             # laneA, 1 job
 bash experiments/wadds/run_cifar10.sh dev            # laneB, 1 job
-# xem kết quả G0/G1 (mục 4), rồi mới chạy:
-bash experiments/wadds/run_cifar10.sh main           # 12 job, 2 lane
+bash experiments/wadds/run_cifar10.sh tune           # lưới G0 quanh cấu hình mặc định (laneA)
+bash experiments/wadds/run_cifar10.sh devbase        # onestep + multistep trên cùng 100 ảnh dev (laneB)
+# đọc kết quả bằng compare_dds (mục 4), chọn cấu hình, rồi mới chạy:
+WADDS_ARGS="--steps 10 --eta 1.0 --gamma 1.0" bash experiments/wadds/run_cifar10.sh main   # 24 job
+bash experiments/wadds/run_cifar10.sh main multistep # baseline cùng giao thức
 bash experiments/wadds/run_cifar10.sh summary        # tính lại mọi summary.json
 ```
 
@@ -75,6 +79,14 @@ Các biến thể:
 
 Nếu `posthoc` thắng còn `posthoc_rev` thua, giả thuyết "dao động nhãn đến từ dải tần thấp" được xác nhận. Nếu ngược lại thì xem mục 5.
 
+**So sánh ghép cặp (bắt buộc trước khi kết luận):**
+```bash
+python -m scripts.compare_dds diag outputs/wadds/diag_s0.5_*/          # biến thể trong từng run + các run tune
+python -m scripts.compare_dds certify outputs/wadds/multistep_s0.5_S10_eta1_N1000_dev100_ds0 \
+    outputs/wadds/onestep_s0.5_N1000_dev100_ds0 outputs/wadds/wadds_s0.5_S10_eta1_g1_N1000_dev100_ds0
+```
+Đối thủ chính là **multistep**, không phải onestep. G0 (26/10) cho thấy phần lớn mức tăng so với onestep đến từ việc lấy mẫu nhiều bước.
+
 **G1** (`wadds_*_dev100_*/summary.json`): `certified_accuracy` tại các bán kính 0 đến 2, `acr`, `abstain_rate`.
 Chỉ có thể kết luận khi đặt cạnh onestep và multistep cùng N, cùng ảnh (bạn chạy sau):
 ```bash
@@ -90,14 +102,14 @@ Ngưỡng GO đã đặt: certified accuracy hơn ít nhất 2 điểm ở ít n
 
 Mỗi lần thử G0 trên 200 ảnh chỉ tốn vài phút GPU.
 
-## 6. Chi phí ước tính
+## 6. Chi phí (đo ngày 26/10)
 
-Ước tính dựa trên throughput forward đo trên A100 (gpu02), khoảng 1.000 img·NFE/s. V100 (gpu04) chậm khoảng gấp đôi.
-
-| Stage | NFE | Thời gian (A100) |
+| | Tốc độ | Peak GPU mem |
 |---|---|---|
-| g0 (3σ × 200 ảnh × 100 mẫu × 19 NFE) | khoảng 1.1 triệu | khoảng 20 phút cộng thời gian khởi động |
-| dev (3σ × 100 ảnh × 1.100 mẫu × 10 NFE) | khoảng 3.3 triệu | khoảng 1 giờ |
-| main (3σ × 500 ảnh × 10.100 mẫu × 10 NFE) | khoảng 150 triệu | khoảng 42 GPU-giờ, chia 12 shard (mỗi shard khoảng 3.5 giờ) |
+| gpu02 (A100), diagnose | khoảng 860 NFE/s; 2.2 s/ảnh (100 mẫu × 19 NFE) | 1.6 GiB (batch 125) |
+| gpu04 (V100), certify N=1000 | khoảng 330 NFE/s; 32.9 s/ảnh | 2.3 GiB (batch 125) |
 
-Số thật được log theo dạng `image k/n: ... s; peak GPU mem ...`. Hãy kiểm tra dòng log này ở job đầu tiên trước khi nộp `main`.
+Thời gian thực tế:
+- `g0`: 22 phút trên A100;
+- `dev`: 2 giờ 46 phút trên V100;
+- `main`: 10.100 × 10 NFE mỗi ảnh. Khoảng 117 s/ảnh trên A100 và khoảng 300 s/ảnh trên V100, nên chia 8 shard khoảng 63 ảnh, `--time 8`, `--batch 500`.
