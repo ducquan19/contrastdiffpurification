@@ -10,7 +10,7 @@
 #   bash experiments/wadds/run_cifar10.sh main [wadds|multistep|onestep]   # 500 test images, N=10k, 24 jobs
 #   bash experiments/wadds/run_cifar10.sh summary   # (re)compute every summary.json, no GPU
 #
-# WA-DDS settings of 'dev' and 'main' come from WADDS_ARGS (default "--steps 10 --eta 1.0 --gamma 1.0");
+# WA-DDS settings of 'dev' and 'main' come from WADDS_ARGS (default "--steps 10 --eta 0 --gamma 1.0");
 # after 'tune', export the chosen ones, e.g. WADDS_ARGS="--steps 10 --eta 0 --gamma 1.0".
 #
 # Run 'main' only after G0 / G1 pass. Only WA-DDS is certified here; G0 also reports the one-shot
@@ -26,9 +26,12 @@ source experiments/pcp/gpu_job.sh
 
 EXP=./wadds
 COMMON="--config cifar10.yml --domain cifar10 --classifier_name cifar10-wideresnet-28-10 --exp $EXP --resume"
-SIGMAS="0.25 0.5 1.0"
+SIGMAS="${SIGMAS:-0.25 0.5 1.0}"   # e.g. SIGMAS="0.5 1.0" bash ... main
 S=10
-WADDS_ARGS="${WADDS_ARGS:---steps 10 --eta 1.0 --gamma 1.0}"
+# Tune (27/10): eta 0 beats eta 1 at sigma 0.5 and 1.0 (ACR CI excludes 0); gamma 0.5, partial
+# windows: worse; pooled: same; S 20: n.s. -> default eta 0. MS_ARGS: the multi-step baseline at the same settings.
+WADDS_ARGS="${WADDS_ARGS:---steps 10 --eta 0 --gamma 1.0}"
+MS_ARGS="${MS_ARGS:---steps 10 --eta 0}"
 
 laneA() { GPU_DEP=singleton GPU_NODE=gpu02 gpu_cmd laneA "$@"; }
 laneB() { GPU_DEP=singleton GPU_EXCLUDE=gpu02 gpu_cmd laneB "$@"; }
@@ -92,17 +95,16 @@ case "${1:-}" in
     METHOD="${2:-wadds}"
     case "$METHOD" in
       wadds) MARGS="--method wadds $WADDS_ARGS" ;;
-      multistep) MARGS="--method multistep --steps $S --eta 1.0" ;;
+      multistep) MARGS="--method multistep $MS_ARGS" ;;
       onestep) MARGS="--method onestep" ;;
       *) echo "unknown method $METHOD" >&2; exit 1 ;;
     esac
-    i=0
     for s in $SIGMAS; do
       for sh in 0 1 2 3 4 5 6 7; do
         run="python -m scripts.certify_dds --mode certify $MARGS --sigma $s --eval_split test --num_sub 500 \
 --data_seed 0 --n0 100 --n 10000 --alpha 0.001 --batch 500 --shard $sh/8 $COMMON"
-        if (( i % 2 == 0 )); then laneA 8 "$run"; else laneB 8 "$run"; fi
-        i=$((i + 1))
+        # A100 (laneA, ~2 h/shard) takes shards 0-5, the slower lane (V100 ~5.3 h/shard) shards 6-7
+        if (( sh < 6 )); then laneA 8 "$run"; else laneB 8 "$run"; fi
       done
     done
     ;;
