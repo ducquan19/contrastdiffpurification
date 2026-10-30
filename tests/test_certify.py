@@ -337,3 +337,139 @@ def test_default_run_names_are_distinct():
         ["--mode", "certify", "--method", "wadds", "--sigma", "0.25"],
     )}
     assert len(names) == 6
+
+
+# --------------------------------------------------------------------------------------------
+# classifier heads and classifier-consistency guidance
+# --------------------------------------------------------------------------------------------
+
+def _linear_classifier(seed=0, n_classes=3):
+    w = torch.randn(n_classes, int(np.prod(SHAPE)), generator=torch.Generator().manual_seed(seed))
+    return lambda img: (img.flatten(1) - 0.5) @ w.T
+
+
+def test_heads_average_softmax_and_flip():
+    from src.certify.heads import ClassifierHead, build_heads, certify_head_key
+
+    f1, f2 = _linear_classifier(0), _linear_classifier(1)
+    x = torch.rand(4, *SHAPE)
+    h = ClassifierHead([f1, f2])
+    expected = (torch.softmax(f1(x), 1) + torch.softmax(f2(x), 1)) / 2
+    assert torch.allclose(h(x).exp(), expected, atol=1e-6)
+    hf = ClassifierHead([f1], flip=True)
+    assert torch.allclose(hf(x), hf(torch.flip(x, dims=[-1])), atol=1e-6)     # flip-invariant
+    assert set(build_heads(f1)) == {""}
+    assert set(build_heads(f1, [f2], flip=True)) == {"", "+flip", "+ens", "+ens+flip"}
+    assert certify_head_key(True, True) == "+ens+flip" and certify_head_key(False, False) == ""
+
+
+def test_guidance_zero_lambda_or_closed_gate_is_multistep():
+    noisy = torch.rand(3, *SHAPE)
+    kw = dict(sigma=0.5, steps=5, eta=0.0)
+    ms = DDSDenoiser(toy_eps, method="multistep", **kw)(noisy)
+    for cfg in (dict(lam=0.0), dict(lam=2.0, conf_min=1.01)):
+        d = DDSDenoiser(toy_eps, method="multistep", **kw)
+        d.set_guidance(_linear_classifier(), t_frac=1.0, **cfg)
+        assert torch.allclose(d(noisy), ms, atol=1e-6)
+
+
+def test_guidance_raises_the_log_prob_of_the_predicted_class():
+    """One DDIM step: the guided x0 = m + lam * unit gradient must raise log p(y_hat)."""
+    f = _linear_classifier()
+    noisy = 0.5 + 0.05 * torch.randn(6, *SHAPE)
+    plain = DDSDenoiser(toy_eps, sigma=0.25, method="multistep", steps=1, eta=0.0)(noisy)
+    d = DDSDenoiser(toy_eps, sigma=0.25, method="multistep", steps=1, eta=0.0)
+    d.set_guidance(f, lam=0.05, t_frac=1.0)
+    guided = d(noisy)
+    lp0, lp1 = torch.log_softmax(f(plain), 1), torch.log_softmax(f(guided), 1)
+    y = lp0.argmax(1)
+    assert torch.all(lp1.gather(1, y[:, None]) > lp0.gather(1, y[:, None]))
+    assert float((guided - plain).flatten(1).norm(dim=1).max()) <= 0.05 / 2 + 1e-5   # [0,1] scale = half
+
+
+def test_guidance_lowpass_removes_high_frequencies():
+    from src.guidance.spectral import radial_frequency
+
+    noisy = 0.5 + 0.05 * torch.randn(4, *SHAPE)
+    plain = DDSDenoiser(toy_eps, sigma=0.25, method="multistep", steps=1, eta=0.0)(noisy)
+    d = DDSDenoiser(toy_eps, sigma=0.25, method="multistep", steps=1, eta=0.0)
+    d.set_guidance(_linear_classifier(), lam=0.05, t_frac=1.0, lowpass=0.5)
+    delta = torch.fft.fft2(d(noisy) - plain, norm="ortho").abs() ** 2
+    r = radial_frequency(SHAPE[1], SHAPE[2])
+    assert float(delta[..., r > 2].sum()) < 1e-3 * float(delta.sum())
+
+
+def test_guided_variant_and_argument_checks():
+    noisy = torch.rand(2, *SHAPE)
+    d = DDSDenoiser(toy_eps, sigma=0.5, method="wadds", steps=3, eta=0.0, gain=torch.rand(SHAPE))
+    with pytest.raises(ValueError):
+        d.diagnose(noisy, variants=DIAG_VARIANTS + ("guided",))       # not configured
+    d.set_guidance(_linear_classifier(), lam=0.1, t_frac=0.5)
+    out = d.diagnose(noisy, torch.Generator().manual_seed(0), variants=DIAG_VARIANTS + ("guided",))
+    assert "guided" in out and out["guided"].shape == noisy.shape
+    with pytest.raises(ValueError):
+        DDSDenoiser(toy_eps, sigma=0.5, method="onestep").set_guidance(_linear_classifier(), lam=1.0)
+    with pytest.raises(ValueError):
+        d.set_guidance(_linear_classifier(), lam=1.0, t_frac=0.0)
+
+
+def test_diagnose_end_to_end_with_heads_and_guidance(tmp_path, monkeypatch):
+    import json
+
+    from scripts import certify_dds as cd
+    from scripts import compare_dds as cmp
+    from src.certify.heads import build_heads
+
+    x = torch.rand(4, *SHAPE)
+    y = torch.tensor([0, 1, 2, 0])
+    monkeypatch.setattr(cd, "load_eval_subset", lambda *a, **k: (x.clone(), y, np.arange(10, 14)))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    f1, f2 = _linear_classifier(0), _linear_classifier(1)
+
+    def fake_build(args, device):
+        den = DDSDenoiser(toy_eps, sigma=args.sigma, method="wadds", steps=args.steps, eta=args.eta,
+                          gain=torch.rand(SHAPE))
+        if args.guide_lambda > 0:
+            den.set_guidance(f1, lam=args.guide_lambda, t_frac=args.guide_t_frac)
+        return den, build_heads(f1, [f2] if args.ens_list else [], flip=args.tta_flip), 3
+
+    monkeypatch.setattr(cd, "build_models", fake_build)
+    argv = ["--mode", "diagnose", "--sigma", "0.5", "--num_sub", "4", "--steps", "2", "--eta", "0",
+            "--n_diag", "10", "--batch", "5", "--exp", str(tmp_path), "--n_boot", "20",
+            "--guide_lambda", "0.1", "--ens_classifiers", "toy2", "--tta_flip"]
+    cd.main(argv)
+    name = cd.default_run_name(cd.parse_args(argv))
+    assert "_gl0.1_gt0.3" in name and "_ens1" in name and name.endswith("_flip_dev4_ds0")
+    s = json.loads((tmp_path / name / "summary.json").read_text())
+    expected = set(DIAG_VARIANTS) | {"guided"} | {f"{v}{k}" for v in ("multistep", "guided")
+                                                  for k in ("+flip", "+ens", "+ens+flip")}
+    assert set(s["variants"]) == expected and s["complete"]
+    pairs = cmp.variant_pairs(set(s["variants"]))
+    assert ("guided+ens", "guided") in pairs and ("guided+ens", "multistep") in pairs
+    assert ("multistep+flip", "multistep") in pairs and pairs.count(("multistep+flip", "multistep")) == 1
+
+
+def test_certify_uses_the_selected_head(tmp_path, monkeypatch):
+    import json
+
+    from scripts import certify_dds as cd
+    from src.certify.heads import build_heads
+
+    x = torch.rand(2, *SHAPE)
+    monkeypatch.setattr(cd, "load_eval_subset", lambda *a, **k: (x.clone(), torch.tensor([0, 1]), np.arange(2)))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    used = []
+    f1 = _linear_classifier(0)
+
+    def spy(img):
+        used.append(img.shape[0])
+        return f1(img)
+
+    monkeypatch.setattr(cd, "build_models", lambda args, device: (
+        DDSDenoiser(toy_eps, sigma=0.5, method="multistep", steps=2, eta=0.0),
+        {"": f1, "+flip": spy}, 3))
+    cd.main(["--mode", "certify", "--method", "multistep", "--sigma", "0.5", "--num_sub", "2", "--steps", "2",
+             "--eta", "0", "--n0", "4", "--n", "8", "--batch", "4", "--exp", str(tmp_path), "--run_name", "r",
+             "--tta_flip"])
+    assert sum(used) == 2 * (4 + 8)
+    assert json.loads((tmp_path / "r" / "summary.json").read_text())["complete"]

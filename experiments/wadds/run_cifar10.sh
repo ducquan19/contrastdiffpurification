@@ -6,6 +6,7 @@
 #   bash experiments/wadds/run_cifar10.sh g0        # gate G0: band diagnosis on 200 dev images, 1 job
 #   bash experiments/wadds/run_cifar10.sh dev       # gate G1: CERTIFY WA-DDS on 100 dev images, 1 job
 #   bash experiments/wadds/run_cifar10.sh tune      # G0 grid around the default, sigma 0.5 / 1.0, 1 job
+#   bash experiments/wadds/run_cifar10.sh screen    # alternatives: classifier ensemble/TTA + consistency guidance
 #   bash experiments/wadds/run_cifar10.sh devbase   # onestep + multistep CERTIFY on the same 100 dev images, 1 job
 #   bash experiments/wadds/run_cifar10.sh main [wadds|multistep|onestep]   # 500 test images, N=10k, 24 jobs
 #   bash experiments/wadds/run_cifar10.sh summary   # (re)compute every summary.json, no GPU
@@ -77,6 +78,34 @@ case "${1:-}" in
     laneA 4 "$cmd"
     ;;
 
+  screen)
+    # Screening of two training-free alternatives on the G0 harness (200 dev images x 100 copies,
+    # sigma 0.5 / 1.0, eta 0), all paired with multistep eta 0 inside each run:
+    #   A) heads: ensemble of off-the-shelf classifiers + flip TTA  -> variants multistep+flip/+ens/+ens+flip
+    #   B) classifier-consistency guidance (4 settings)            -> variant guided (+ heads in setting 1)
+    # Runs on its own lane (default laneC pinned to gpu03; pick a node where you have no job:
+    #   LANE=laneC NODE=gpu01 bash ... screen). ~10-20 min per run on A100, 8 runs.
+    ENS=""
+    for c in resnet-50 wrn-70-16-dropout; do
+      if [ -f "pretrained/cifar10/$c/weights.pt" ]; then ENS+="${ENS:+,}cifar10-$c"
+      else echo "warning: pretrained/cifar10/$c/weights.pt missing -> not in the ensemble" >&2; fi
+    done
+    HEADS="--tta_flip${ENS:+ --ens_classifiers $ENS}"
+    cmd=""
+    for s in 0.5 1.0; do
+      i=0
+      for g in "--guide_lambda 1 --guide_t_frac 0.3" "--guide_lambda 1 --guide_t_frac 0.3 --guide_lowpass 4" \
+               "--guide_lambda 3 --guide_t_frac 0.3 --guide_lowpass 4" "--guide_lambda 1 --guide_t_frac 0.6 --guide_lowpass 4"; do
+        h=""; (( i == 0 )) && h="$HEADS"
+        cmd+="python -m scripts.certify_dds --mode diagnose --sigma $s --steps 10 --eta 0 --gamma 1.0 $g $h \
+--eval_split dev --num_sub 200 --data_seed 0 --n_diag 100 --batch 125 $COMMON \
+|| echo 'SCREEN RUN FAILED: sigma $s, $g'; "
+        i=$((i + 1))
+      done
+    done
+    GPU_DEP=singleton GPU_NODE="${NODE:-gpu03}" gpu_cmd "${LANE:-laneC}" 5 "$cmd"
+    ;;
+
   devbase)
     # baselines of gate G1 on the same 100 dev images and N as 'dev': onestep (1 NFE) and multistep (S NFE)
     cmd=""
@@ -115,7 +144,7 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "usage: $0 {stats|g0|dev|tune|devbase|main [method]|summary}" >&2
+    echo "usage: $0 {stats|g0|dev|tune|screen|devbase|main [method]|summary}" >&2
     exit 1
     ;;
 esac

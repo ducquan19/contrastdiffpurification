@@ -27,6 +27,18 @@ depend on ``x~`` and on randomness independent of ``x`` only, so Cohen et al.'s 
 the smoothed classifier. Never anchor to the clean / un-noised input, and never give several
 particles different smoothing noise (the radius would shrink by about sqrt(K)).
 
+Classifier-consistency guidance (``set_guidance``; optional for ``multistep`` / ``wadds``): at the
+steps with ``t <= t_frac * t_sigma`` the clean estimate takes one normalized gradient-ascent step
+on the classifier's log-probability of its own current prediction,
+
+    x0 <- x0 + lam * g / ||g||_2,   g = LP_s[ grad_{x0} log p_f(y_hat | x0) ],   y_hat = argmax f(x0),
+
+applied only to the rows whose confidence max p_f >= conf_min; ``LP_s`` is an optional Gaussian
+low-pass (``lowpass`` cycles/image) that suppresses the high-frequency, adversarial-like part of
+the gradient of a non-robust classifier. The noise prediction is then made consistent with the
+new ``x0`` as for the anchor. The guidance depends on ``x~`` and on the fixed classifier only, so
+the certificate stays valid; ``lam = 0`` gives back the unguided trajectory exactly.
+
 The DDIM step count is the number of score-network evaluations (NFE): the first step reuses the
 evaluation at ``t_sigma`` that produced ``m``.
 """
@@ -38,10 +50,13 @@ from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import torch
 
+from src.guidance.spectral import gaussian_lowpass
 from src.models.diffusion.sampler import BETA_MAX, BETA_MIN, alpha_bar_cont, make_time_grid
 
 METHODS = ("onestep", "multistep", "wadds")
 DIAG_VARIANTS = ("onestep", "multistep", "posthoc", "posthoc_rev", "wadds")
+GUIDED = "guided"
+GUIDE_BASES = ("multistep", "wadds")
 
 
 def sigma_to_time(sigma: float, beta_min: float = BETA_MIN, beta_max: float = BETA_MAX) -> float:
@@ -107,6 +122,44 @@ class DDSDenoiser:
         self.t_sigma = sigma_to_time(self.sigma, beta_min, beta_max)
         if not self.t_sigma > self.t_end:
             raise ValueError(f"t_sigma={self.t_sigma} must exceed t_end={self.t_end}")
+        self.guide: Optional[dict] = None
+
+    # ------------------------------------------------------------------ guidance
+    def set_guidance(self, classifier: Callable[[torch.Tensor], torch.Tensor], *, lam: float,
+                     t_frac: float = 0.3, conf_min: float = 0.0, lowpass: float = 0.0,
+                     base: str = "multistep") -> None:
+        """Enable classifier-consistency guidance (module docstring); ``base`` = trajectory of ``guided``."""
+        if lam < 0:
+            raise ValueError(f"lam must be >= 0, got {lam}")
+        if not 0.0 < t_frac <= 1.0:
+            raise ValueError(f"t_frac must be in (0, 1], got {t_frac}")
+        if base not in GUIDE_BASES:
+            raise ValueError(f"unknown guidance base '{base}'; available: {', '.join(GUIDE_BASES)}")
+        if base == "wadds" and self.gain is None:
+            raise ValueError("guidance on the anchored trajectory needs the Wiener gain")
+        if self.method == "onestep":
+            raise ValueError("guidance needs a multi-step trajectory, not 'onestep'")
+        self.guide = dict(classifier=classifier, lam=float(lam), t_frac=float(t_frac),
+                          conf_min=float(conf_min), lowpass=float(lowpass), base=base)
+
+    def _guide_active(self, t: float) -> bool:
+        return self.guide is not None and t <= self.guide["t_frac"] * self.t_sigma + 1e-12
+
+    def _guide_x0(self, x0: torch.Tensor) -> torch.Tensor:
+        g = self.guide
+        if g["lam"] == 0.0:
+            return x0
+        with torch.enable_grad():
+            z = x0.detach().clamp(-1, 1).requires_grad_(True)
+            logp = torch.log_softmax(g["classifier"]((z + 1) * 0.5).float(), dim=1)
+            conf, y_hat = logp.detach().exp().max(dim=1)
+            (grad,) = torch.autograd.grad(logp.gather(1, y_hat[:, None]).sum(), z)
+        grad = grad.to(x0.dtype)
+        if g["lowpass"] > 0:
+            grad = gaussian_lowpass(grad, g["lowpass"])
+        unit = grad / grad.flatten(1).norm(dim=1).clamp_min(1e-12).view(-1, 1, 1, 1)
+        mask = (conf >= g["conf_min"]).to(x0.dtype).view(-1, 1, 1, 1)
+        return x0 + g["lam"] * mask * unit
 
     # ------------------------------------------------------------------ helpers
     @property
@@ -139,7 +192,7 @@ class DDSDenoiser:
         return torch.randn((self.steps, *shape), generator=generator, device=device, dtype=dtype)
 
     def trajectory(self, x_t: torch.Tensor, eps0: torch.Tensor, m: torch.Tensor, zs: torch.Tensor,
-                   anchored: bool) -> torch.Tensor:
+                   anchored: bool, guided: bool = False) -> torch.Tensor:
         """DDIM from ``t_sigma`` towards ``t_end``; returns the clean estimate of the last step.
 
         The last step's (anchored) Tweedie estimate ``x0`` is returned instead of the state at
@@ -154,8 +207,14 @@ class DDSDenoiser:
             ab_t, ab_s = self._ab(t), self._ab(s)
             eps = eps0 if i == 0 else self._eps(x, t)
             x0 = (x - math.sqrt(1.0 - ab_t) * eps) / math.sqrt(ab_t)
+            changed = False
             if anchored and self._in_window(t):
                 x0 = spectral_blend(x0, m, self._weight(m))
+                changed = True
+            if guided and self._guide_active(t):
+                x0 = self._guide_x0(x0)
+                changed = True
+            if changed:
                 eps = (x - math.sqrt(ab_t) * x0) / math.sqrt(1.0 - ab_t)
             sig = self.eta * math.sqrt(max((1 - ab_s) / (1 - ab_t), 0.0)) * math.sqrt(max(1 - ab_t / ab_s, 0.0))
             c_eps = math.sqrt(max(1.0 - ab_s - sig ** 2, 0.0))
@@ -170,7 +229,8 @@ class DDSDenoiser:
             out = m
         else:
             zs = self.draw_step_noise(x_noisy.shape, generator, x_noisy.device, x_noisy.dtype)
-            out = self.trajectory(x_t, eps0, m, zs, anchored=(self.method == "wadds"))
+            out = self.trajectory(x_t, eps0, m, zs, anchored=(self.method == "wadds"),
+                                  guided=self.guide is not None)
         return ((out.clamp(-1, 1) + 1) * 0.5)
 
     @torch.no_grad()
@@ -180,14 +240,16 @@ class DDSDenoiser:
 
         ``onestep`` = m; ``multistep`` = unanchored sample s; ``posthoc`` = low band of m + high
         band of s (``W``-blend of the two final images); ``posthoc_rev`` = low band of s + high
-        band of m; ``wadds`` = the anchored trajectory. Common random numbers make the paired
+        band of m; ``wadds`` = the anchored trajectory; ``guided`` (only after ``set_guidance``) =
+        the guided ``multistep`` or ``wadds`` trajectory. Common random numbers make the paired
         differences between variants much less noisy than independent runs.
         """
         if self.gain is None:
             raise ValueError("diagnose() needs the Wiener gain")
-        unknown = set(variants) - set(DIAG_VARIANTS)
+        allowed = DIAG_VARIANTS + ((GUIDED,) if self.guide is not None else ())
+        unknown = set(variants) - set(allowed)
         if unknown:
-            raise ValueError(f"unknown variants {sorted(unknown)}; available: {DIAG_VARIANTS}")
+            raise ValueError(f"unknown variants {sorted(unknown)}; available: {allowed}")
         x_t, eps0, m = self.start(x_noisy)
         zs = self.draw_step_noise(x_noisy.shape, generator, x_noisy.device, x_noisy.dtype)
         out = {"onestep": m}
@@ -199,6 +261,9 @@ class DDSDenoiser:
             out["posthoc_rev"] = spectral_blend(m, s, w)
         if "wadds" in variants:
             out["wadds"] = self.trajectory(x_t, eps0, m, zs, anchored=True)
+        if GUIDED in variants:
+            out[GUIDED] = self.trajectory(x_t, eps0, m, zs, anchored=(self.guide["base"] == "wadds"),
+                                          guided=True)
         return {k: ((v.clamp(-1, 1) + 1) * 0.5) for k, v in out.items() if k in variants}
 
 

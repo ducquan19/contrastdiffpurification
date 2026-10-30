@@ -113,3 +113,18 @@ Thời gian thực tế:
 - `g0`: 22 phút trên A100;
 - `dev`: 2 giờ 46 phút trên V100;
 - `main`: 10.100 × 10 NFE mỗi ảnh. Khoảng 117 s/ảnh trên A100 và khoảng 300 s/ảnh trên V100, nên chia 8 shard khoảng 63 ảnh, `--time 8`, `--batch 500`.
+
+## 7. Thử nghiệm phương pháp thay thế (stage `screen`, 27/10)
+
+Kết quả tune: khi dùng η = 0, phần neo phổ gần như không còn hơn DDIM deterministic. Cấu hình mặc định giờ là η = 0. Stage `screen` thử hai hướng, đều không huấn luyện gì và đều giữ chứng nhận hợp lệ:
+
+- **A. Classifier head** (`src/certify/heads.py`; cờ `--ens_classifiers a,b`, `--tta_flip`): trung bình softmax của nhiều classifier có sẵn, trên ảnh gốc và ảnh lật ngang. Áp lên biến thể `multistep` và `guided`, tạo các biến thể `+flip`, `+ens`, `+ens+flip`.
+- **B. Guidance theo tính nhất quán của classifier** (`DDSDenoiser.set_guidance`; các cờ `--guide_*`):
+  - chỉ áp ở các bước có $t \le$ `t_frac` $\cdot t_\sigma$;
+  - cập nhật $x_0 \leftarrow x_0 + \lambda\, g/\|g\|$, với $g$ là gradient của $\log p_f(\hat y\mid x_0)$;
+  - tùy chọn low-pass gradient (`--guide_lowpass`, đơn vị chu kỳ/ảnh) để bỏ phần tần cao mang tính đối kháng;
+  - tùy chọn cổng theo độ tự tin (`--guide_conf_min`).
+
+  Thành phần này tạo biến thể `guided`.
+
+Đọc kết quả: `compare_dds diag` tự so mỗi biến thể mới với `multistep`, và với biến thể gốc của nó, ví dụ `guided+ens` so với `guided`.

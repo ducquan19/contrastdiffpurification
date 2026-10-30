@@ -30,7 +30,9 @@ import time
 import numpy as np
 import torch
 
-from src.certify.denoisers import DIAG_VARIANTS, METHODS, DDSDenoiser, make_base_classifier
+from src.certify.denoisers import (DIAG_VARIANTS, GUIDE_BASES, GUIDED, METHODS, DDSDenoiser,
+                                   make_base_classifier)
+from src.certify.heads import build_heads, certify_head_key
 from src.certify.smoothing import (DEFAULT_RADII, certify, image_generator, plugin_radius,
                                    summarize)
 from src.certify.spectrum import POWER_MODES, load_power, wiener_gain
@@ -66,6 +68,15 @@ def parse_args(argv=None):
     p.add_argument("--power_path", default=None, help="default: pretrained/spectral/<domain>_power.pt")
     p.add_argument("--power_mode", choices=POWER_MODES, default="channel")
     p.add_argument("--t_end", type=float, default=1e-5)
+    # classifier heads (training-free): ensemble of off-the-shelf classifiers, flip TTA
+    p.add_argument("--ens_classifiers", default="", help="comma-separated extra classifier names (ensemble)")
+    p.add_argument("--tta_flip", action="store_true", help="average the prediction with the mirrored image")
+    # classifier-consistency guidance (src/certify/denoisers.py)
+    p.add_argument("--guide_lambda", type=float, default=0.0, help="l2 step per guided step; 0 = off")
+    p.add_argument("--guide_t_frac", type=float, default=0.3, help="guide steps with t <= frac * t_sigma")
+    p.add_argument("--guide_conf_min", type=float, default=0.0, help="guide only rows with max prob >= this")
+    p.add_argument("--guide_lowpass", type=float, default=0.0, help="Gaussian low-pass of the gradient (cycles); 0 = off")
+    p.add_argument("--guide_base", choices=GUIDE_BASES, default="multistep", help="trajectory of the guided variant")
     # data
     p.add_argument("--eval_split", choices=EVAL_SPLITS, default="dev")
     p.add_argument("--num_sub", type=int, default=100)
@@ -92,6 +103,9 @@ def parse_args(argv=None):
         p.error(f"bad --shard {args.shard}")
     args.shard_i, args.shard_n = i, n
     args.radii_list = [float(r) for r in args.radii.split(",")]
+    args.ens_list = [c for c in args.ens_classifiers.split(",") if c]
+    if args.mode == "certify" and args.method == "onestep" and args.guide_lambda > 0:
+        p.error("--guide_lambda needs --method multistep or wadds")
     return args
 
 
@@ -110,6 +124,18 @@ def default_run_name(args) -> str:
             name += f"_w{args.anchor_t_min:g}-{args.anchor_t_max:g}"
         if args.power_mode != "channel":
             name += f"_{args.power_mode}"
+    if getattr(args, "guide_lambda", 0.0) > 0:
+        name += f"_gl{args.guide_lambda:g}_gt{args.guide_t_frac:g}"
+        if args.guide_conf_min > 0:
+            name += f"_gc{args.guide_conf_min:g}"
+        if args.guide_lowpass > 0:
+            name += f"_glp{args.guide_lowpass:g}"
+        if args.guide_base != "multistep":
+            name += f"_gb{args.guide_base}"
+    if getattr(args, "ens_list", []):
+        name += f"_ens{len(args.ens_list)}"
+    if getattr(args, "tta_flip", False):
+        name += "_flip"
     if args.mode == "certify":
         name += f"_N{args.n}"
     return f"{name}_{args.eval_split}{args.num_sub}_ds{args.data_seed}"
@@ -119,17 +145,30 @@ def default_run_name(args) -> str:
 # models
 # --------------------------------------------------------------------------------------------
 
+def _frozen(model, device):
+    model = model.to(device).eval()
+    for q in model.parameters():
+        q.requires_grad_(False)
+    return model
+
+
 def build_models(args, device):
-    """(denoiser, classifier, n_classes); imports score_sde / robustbench lazily."""
+    """(denoiser, heads, n_classes); imports score_sde / robustbench lazily.
+
+    ``heads`` maps a variant suffix to a classifier head (src/certify/heads.py); ``heads['']`` is
+    the main classifier, which also drives the guidance.
+    """
     from src.config import load_config
     from src.models.classifiers import get_image_classifier
     from src.models.diffusion.base import VPDynamics, load_score_model
     from src.models.diffusion.sampler import alpha_bar_cont
 
     spec = get_dataset_spec(args.domain)
-    classifier = get_image_classifier(args.classifier_name).to(device).eval()
-    for q in classifier.parameters():
-        q.requires_grad_(False)
+    classifier = _frozen(get_image_classifier(args.classifier_name), device)
+    extra = [_frozen(get_image_classifier(name), device) for name in args.ens_list]
+    heads = build_heads(classifier, extra, flip=args.tta_flip)
+    if extra or args.tta_flip:
+        logger.info("classifier heads: %s (ensemble: %s)", sorted(heads), [args.classifier_name, *args.ens_list])
 
     config = load_config(args.config)
     config.device = device
@@ -155,10 +194,15 @@ def build_models(args, device):
     denoiser = DDSDenoiser(eps_fn, sigma=args.sigma, method=args.method if args.mode == "certify" else "wadds",
                            steps=args.steps, eta=args.eta, gain=gain, gamma=args.gamma,
                            anchor_window=(args.anchor_t_min, args.anchor_t_max), t_end=args.t_end)
+    if args.guide_lambda > 0:
+        denoiser.set_guidance(classifier, lam=args.guide_lambda, t_frac=args.guide_t_frac,
+                              conf_min=args.guide_conf_min, lowpass=args.guide_lowpass, base=args.guide_base)
+        logger.info("classifier-consistency guidance: %s",
+                    {k: v for k, v in denoiser.guide.items() if k != "classifier"})
     logger.info("sigma=%g -> t_sigma=%.4f (discrete ~%d), method=%s, NFE/sample=%d",
                 args.sigma, denoiser.t_sigma, round(denoiser.t_sigma * 1000),
                 denoiser.method if args.mode == "certify" else "diagnose", denoiser.nfe)
-    return denoiser, classifier, spec.num_classes
+    return denoiser, heads, spec.num_classes
 
 
 # --------------------------------------------------------------------------------------------
@@ -304,7 +348,13 @@ def main(argv=None):
     x_all, y_all, indices = load_eval_subset(args.domain, args.num_sub, args.data_seed,
                                              split=args.eval_split, log_dir=run_dir)
     x_all = x_all.detach()
-    denoiser, classifier, n_classes = build_models(args, device)
+    denoiser, heads, n_classes = build_models(args, device)
+    if not isinstance(heads, dict):          # a bare classifier (tests)
+        heads = {"": heads}
+    cert_key = certify_head_key(bool(getattr(args, "ens_list", [])), getattr(args, "tta_flip", False))
+    variants = DIAG_VARIANTS + ((GUIDED,) if getattr(denoiser, "guide", None) is not None else ())
+    head_targets = {"multistep", GUIDED}   # extra heads only here (cost; wadds ~ multistep at eta 0)
+    diag_keys = [v for v in variants] + [v + k for v in variants if v in head_targets for k in heads if k]
 
     prefix, fields = ("certify", CERT_FIELDS) if args.mode == "certify" else ("diag", DIAG_FIELDS)
     path = shard_file(run_dir, prefix, args)
@@ -317,7 +367,7 @@ def main(argv=None):
     logger.info("%d images to do in shard %s (%d already done)", len(todo), args.shard, len(done))
 
     gen_ref = [None]
-    base = make_base_classifier(denoiser, classifier, gen_ref)
+    base = make_base_classifier(denoiser, heads[cert_key], gen_ref)
     fh, writer = open_writer(path, fields)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -338,16 +388,19 @@ def main(argv=None):
                                  "count_cA": int(r.counts_estimate[r.predict]) if r.predict >= 0 else 0,
                                  "seconds": f"{time.time() - t0:.2f}"})
             else:
-                counts = {v: np.zeros(n_classes, dtype=np.int64) for v in DIAG_VARIANTS}
+                counts = {v: np.zeros(n_classes, dtype=np.int64) for v in diag_keys}
                 remaining = args.n_diag
                 while remaining > 0:
                     b = min(args.batch, remaining)
                     xi = torch.randn((b, *x.shape), generator=gen, device=device, dtype=x.dtype)
-                    outs = denoiser.diagnose(x.unsqueeze(0) + args.sigma * xi, gen)
+                    outs = denoiser.diagnose(x.unsqueeze(0) + args.sigma * xi, gen, variants=variants)
                     with torch.no_grad():
                         for v, img in outs.items():
-                            pred = classifier(img).argmax(1).cpu().numpy()
-                            counts[v] += np.bincount(pred, minlength=n_classes)[:n_classes]
+                            for k, head in heads.items():
+                                if k and v not in head_targets:
+                                    continue
+                                pred = head(img).argmax(1).cpu().numpy()
+                                counts[v + k] += np.bincount(pred, minlength=n_classes)[:n_classes]
                     remaining -= b
                 for v, c in counts.items():
                     writer.writerow({"pos": pos, "idx": idx, "label": label, "variant": v,

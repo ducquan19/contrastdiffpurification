@@ -31,6 +31,19 @@ PAIRS = (("wadds", "multistep"), ("posthoc", "multistep"), ("wadds", "posthoc"),
          ("multistep", "onestep"), ("wadds", "onestep"))
 
 
+BASE_VARIANTS = {"onestep", "multistep", "posthoc", "posthoc_rev", "wadds"}
+
+
+def variant_pairs(variants) -> list:
+    """Fixed pairs plus, for every extra variant (heads ``v+ens``..., ``guided``), v - multistep and v - its base."""
+    pairs = [(a, b) for a, b in PAIRS if a in variants and b in variants]
+    for v in sorted(set(variants) - BASE_VARIANTS):
+        for ref in ("multistep", v.split("+")[0]):
+            if ref != v and ref in variants and (v, ref) not in pairs:
+                pairs.append((v, ref))
+    return pairs
+
+
 def boot_ci(d: np.ndarray, n_boot: int = 5000, seed: int = 0):
     if len(d) == 0:
         return (float("nan"), float("nan"))
@@ -77,6 +90,9 @@ def _fmt(name, c):
 def sigma_of(run_dir: str) -> float:
     import glob
     import json
+    if not os.path.isdir(run_dir):
+        raise SystemExit(f"run folder not found: {run_dir}\n(an unmatched shell glob is passed literally: "
+                         f"the run was never started or has another name; check `ls outputs/wadds/`)")
     cfgs = sorted(glob.glob(os.path.join(run_dir, "resolved_config_shard*.json")))
     if not cfgs:
         raise FileNotFoundError(f"no resolved config in {run_dir}")
@@ -91,9 +107,8 @@ def run_diag(dirs):
         v = load_diag(d, s)
         runs.append((os.path.basename(os.path.normpath(d)), s, v))
         print(f"\n## {runs[-1][0]}  (sigma={s:g})")
-        for a, b in PAIRS:
-            if a in v and b in v:
-                print(_fmt(f"{a} - {b}", compare_variants(v[a], v[b])))
+        for a, b in variant_pairs(v):
+            print(_fmt(f"{a} - {b}", compare_variants(v[a], v[b])))
     if len(runs) > 1:
         print("\n## across runs: wadds variant vs the wadds variant of the first run with the same sigma")
         for name, s, v in runs[1:]:
