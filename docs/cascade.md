@@ -38,7 +38,8 @@ multi-step (tests/test_cascade.py).
 
 ## Protocol
 
-1. `fetch` (login node): install transformers, download the checkpoints, and report the clean
+1. `fetch` (login node): download the checkpoints (the ViT runs on the plain-PyTorch
+   `src/models/vit.py`, checked against `transformers` to about 1e-7 on the logits), and report the clean
    dev accuracy of each classifier (sanity check of the weights and the label order).
 2. `screen` (1 GPU job): `scripts/screen_cascade.py`. 200 dev images, 200 draws, one-shot plus
    S = 5 and S = 10 on the same draws, probabilities of all 4 classifiers saved.

@@ -1,5 +1,6 @@
 """HuggingFace image classifiers on [0, 1] inputs (no robustbench import; CPU-testable)."""
 
+import json
 import logging
 
 import torch
@@ -48,16 +49,29 @@ class HFImageClassifier(nn.Module):
 
 
 def load_hf_classifier(repo, expected=CIFAR10_CLASSES):
-    """``hf:<repo>``; weights cached under pretrained/hf (needs ``pip install transformers``)."""
-    try:
-        from transformers import AutoModelForImageClassification
-    except ImportError as e:
-        raise ImportError("hf:<repo> classifiers need 'pip install transformers'") from e
-    model = AutoModelForImageClassification.from_pretrained(repo, cache_dir=pretrained_path('hf')).eval()
-    id2label = getattr(model.config, 'id2label', None)
+    """``hf:<repo>``; weights cached under pretrained/hf.
+
+    ViT checkpoints are run by the plain-PyTorch ``src.models.vit`` (same weights and logits as
+    ``transformers``, without its PyTorch-version requirements); other model types need
+    ``pip install transformers``.
+    """
+    from src.models.vit import _download, load_vit_from_hub
+    cache = pretrained_path('hf')
+    with open(_download(repo, 'config.json', cache), encoding='utf-8') as fh:
+        model_type = json.load(fh).get('model_type')
+    if model_type == 'vit':
+        model = load_vit_from_hub(repo, cache)
+        cfg = model.config
+        id2label, size = cfg.get('id2label'), cfg.get('image_size', 224)
+    else:
+        try:
+            from transformers import AutoModelForImageClassification
+        except ImportError as e:
+            raise ImportError(f"hf:{repo} ({model_type}) needs 'pip install transformers'") from e
+        model = AutoModelForImageClassification.from_pretrained(repo, cache_dir=cache).eval()
+        id2label, size = getattr(model.config, 'id2label', None), getattr(model.config, 'image_size', 224)
     perm = label_permutation(id2label, list(expected))
     if perm is None:
         raise ValueError(f"{repo}: labels {id2label} do not match {expected}")
-    size = getattr(model.config, 'image_size', 224)
-    logger.info("HF classifier %s: input %dx%d, label permutation %s", repo, size, size, perm)
+    logger.info("HF classifier %s (%s): input %dx%d, label permutation %s", repo, model_type, size, size, perm)
     return HFImageClassifier(model, size=size, perm=None if perm == list(range(len(perm))) else perm).eval()

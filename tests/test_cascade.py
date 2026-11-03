@@ -234,3 +234,23 @@ def test_screen_and_analyze_end_to_end(tmp_path, monkeypatch, capsys):
     assert (tmp_path / "r" / "policies.tsv").exists() and (tmp_path / "r" / "cascade_curve.tsv").exists()
     ac.print_report(a)
     assert "GATE" in capsys.readouterr().out
+
+
+def test_plain_vit_matches_transformers():
+    transformers = pytest.importorskip("transformers")
+    from src.models.vit import ViTForImageClassification, to_legacy_keys
+
+    cfg = dict(hidden_size=32, num_hidden_layers=2, num_attention_heads=4, intermediate_size=64,
+               image_size=32, patch_size=8, num_channels=3, layer_norm_eps=1e-12, qkv_bias=True,
+               hidden_act="gelu", model_type="vit", id2label={str(i): f"c{i}" for i in range(5)})
+    try:
+        ref = transformers.ViTForImageClassification(transformers.ViTConfig(**cfg)).eval()
+    except ImportError as e:                      # transformers without a usable torch backend
+        pytest.skip(str(e))
+    ours = ViTForImageClassification(cfg).eval()
+    state = {k: v for k, v in to_legacy_keys(ref.state_dict()).items() if not k.startswith("vit.pooler.")}
+    missing, unexpected = ours.load_state_dict(state, strict=False)
+    assert not missing and not unexpected
+    x = torch.randn(3, 3, 32, 32)
+    with torch.no_grad():
+        assert torch.allclose(ours(pixel_values=x).logits, ref(pixel_values=x).logits, atol=1e-5)

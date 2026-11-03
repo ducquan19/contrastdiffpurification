@@ -2,7 +2,7 @@
 # Confidence-routed cascade DDS on CIFAR-10 (docs/cascade.md). Run from the repository root on the login node:
 #
 #   source /media02/lhbac34/cdp.sh                    # env + experiments/pcp/gpu_job.sh
-#   bash experiments/cascade/run_cifar10.sh fetch     # login node: transformers + download the classifiers
+#   bash experiments/cascade/run_cifar10.sh fetch     # login node: download the classifiers, clean dev accuracy
 #   bash experiments/cascade/run_cifar10.sh screen    # 1 GPU job: probabilities on 200 dev images, 3 sigmas
 #   bash experiments/cascade/run_cifar10.sh analyze   # login node, CPU: every head / cascade + the gate
 #   CLF_ARGS="..." bash experiments/cascade/run_cifar10.sh main onestep|multistep|cascade
@@ -31,8 +31,8 @@ laneB() { GPU_DEP=singleton GPU_EXCLUDE=gpu02 gpu_cmd laneB "$@"; }
 
 case "${1:-}" in
   fetch)
-    # compute nodes may have no internet: download every checkpoint here (pretrained/robustbench, pretrained/hf)
-    python -c "import transformers" 2>/dev/null || pip install "transformers>=4.30"
+    # compute nodes may have no internet: download every checkpoint here (pretrained/robustbench, pretrained/hf).
+    # The ViT runs on src/models/vit.py (plain PyTorch): transformers is NOT needed.
     python - <<EOF
 import torch
 from src.models.classifiers import get_image_classifier
