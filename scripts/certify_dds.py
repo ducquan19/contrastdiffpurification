@@ -6,7 +6,9 @@ Two modes, both on a fixed image subset (``--eval_split`` / ``--num_sub`` / ``--
                      shared randomness and classified under five variants (one-shot mean m,
                      unanchored sample s, post-hoc band blends of m and s, WA-DDS). Records the
                      frequency of the true class per variant; no confidence bound.
-``--mode certify``   Cohen et al.'s CERTIFY with ``--method`` (onestep | multistep | wadds).
+``--mode certify``   Cohen et al.'s CERTIFY with ``--method`` (onestep | multistep | wadds | cascade;
+                     cascade = one-shot, continued to multi-step when the head's confidence is
+                     below ``--exit_tau``, docs/cascade.md).
 
 Results go to ``outputs/<exp>/<run_name>/`` as one TSV per shard (``--shard i/n``), appended image
 by image, so a killed job is resumed with the same command plus ``--resume``. ``summary.json`` is
@@ -32,7 +34,8 @@ import torch
 
 from src.certify.denoisers import (DIAG_VARIANTS, GUIDE_BASES, GUIDED, METHODS, DDSDenoiser,
                                    make_base_classifier)
-from src.certify.heads import build_heads, certify_head_key
+from src.certify.cascade import cascade_nfe, make_cascade_base
+from src.certify.heads import ConfidenceRouter, build_heads, certify_head_key
 from src.certify.smoothing import (DEFAULT_RADII, certify, image_generator, plugin_radius,
                                    summarize)
 from src.certify.spectrum import POWER_MODES, load_power, wiener_gain
@@ -44,6 +47,9 @@ from src.utils import setup_logging
 logger = logging.getLogger(__name__)
 
 CERT_FIELDS = ["pos", "idx", "label", "predict", "correct", "p_lower", "radius", "count_cA", "seconds"]
+CASCADE = "cascade"
+CERT_METHODS = METHODS + (CASCADE,)
+DEFAULT_CLASSIFIER = "cifar10-wideresnet-28-10"
 DIAG_FIELDS = ["pos", "idx", "label", "variant", "n", "n_true", "top_class", "n_top"]
 
 
@@ -54,10 +60,12 @@ DIAG_FIELDS = ["pos", "idx", "label", "variant", "n", "n_true", "top_class", "n_
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--mode", choices=("certify", "diagnose"), default="certify")
-    p.add_argument("--method", choices=METHODS, default="wadds", help="denoiser for --mode certify")
+    p.add_argument("--method", choices=CERT_METHODS, default="wadds", help="denoiser for --mode certify")
     p.add_argument("--config", default="cifar10.yml", help="score-SDE config in configs/")
     p.add_argument("--domain", default="cifar10", choices=DATASET_NAMES)
-    p.add_argument("--classifier_name", default="cifar10-wideresnet-28-10")
+    p.add_argument("--classifier_name", default=DEFAULT_CLASSIFIER,
+                   help="also robustbench:<name>[:<threat>] or hf:<repo> (src/models/classifiers)")
+    p.add_argument("--clf_tag", default=None, help="run-name tag of a non-default classifier")
     p.add_argument("--sigma", type=float, required=True, help="smoothing noise, [0, 1] pixel scale")
     # denoiser
     p.add_argument("--steps", type=int, default=10, help="DDIM steps = NFE per noisy sample")
@@ -71,6 +79,10 @@ def parse_args(argv=None):
     # classifier heads (training-free): ensemble of off-the-shelf classifiers, flip TTA
     p.add_argument("--ens_classifiers", default="", help="comma-separated extra classifier names (ensemble)")
     p.add_argument("--tta_flip", action="store_true", help="average the prediction with the mirrored image")
+    p.add_argument("--route_classifiers", default="", help="comma-separated extra classifiers; the head answers "
+                   "with the most confident of main + these (heads.ConfidenceRouter)")
+    # cascade (--method cascade): one-shot first, multi-step (--steps, --eta) if confidence < tau
+    p.add_argument("--exit_tau", type=float, default=None, help="cascade confidence threshold (tune on dev)")
     # classifier-consistency guidance (src/certify/denoisers.py)
     p.add_argument("--guide_lambda", type=float, default=0.0, help="l2 step per guided step; 0 = off")
     p.add_argument("--guide_t_frac", type=float, default=0.3, help="guide steps with t <= frac * t_sigma")
@@ -104,6 +116,18 @@ def parse_args(argv=None):
     args.shard_i, args.shard_n = i, n
     args.radii_list = [float(r) for r in args.radii.split(",")]
     args.ens_list = [c for c in args.ens_classifiers.split(",") if c]
+    args.route_list = [c for c in args.route_classifiers.split(",") if c]
+    if args.ens_list and args.route_list:
+        p.error("--ens_classifiers and --route_classifiers are exclusive")
+    if args.route_list and args.tta_flip:
+        p.error("--route_classifiers does not combine with --tta_flip")
+    if args.method == CASCADE:
+        if args.exit_tau is None:
+            p.error("--method cascade needs --exit_tau")
+        if args.guide_lambda > 0:
+            p.error("--method cascade does not support guidance")
+        if args.mode != "certify":
+            p.error("--method cascade is a --mode certify method (screen it with scripts/screen_cascade.py)")
     if args.mode == "certify" and args.method == "onestep" and args.guide_lambda > 0:
         p.error("--guide_lambda needs --method multistep or wadds")
     return args
@@ -117,6 +141,8 @@ def default_run_name(args) -> str:
         name = f"onestep_{base}"
     elif args.method == "multistep":
         name = f"multistep_{base}_S{args.steps}_eta{args.eta:g}"
+    elif args.method == CASCADE:
+        name = f"cascade_{base}_S{args.steps}_eta{args.eta:g}_tau{args.exit_tau:g}"
     else:
         name = f"wadds_{base}_S{args.steps}_eta{args.eta:g}_g{args.gamma:g}"
     if args.mode == "diagnose" or args.method == "wadds":
@@ -136,9 +162,25 @@ def default_run_name(args) -> str:
         name += f"_ens{len(args.ens_list)}"
     if getattr(args, "tta_flip", False):
         name += "_flip"
+    if getattr(args, "route_list", []):
+        name += f"_route{len(args.route_list)}"
+    tag = classifier_tag(args)
+    if tag:
+        name += f"_clf-{tag}"
     if args.mode == "certify":
         name += f"_N{args.n}"
     return f"{name}_{args.eval_split}{args.num_sub}_ds{args.data_seed}"
+
+
+def classifier_tag(args) -> str:
+    """'' for the default classifier (run names of earlier runs unchanged), else a short tag."""
+    name = getattr(args, "classifier_name", DEFAULT_CLASSIFIER)
+    if getattr(args, "clf_tag", None):
+        return args.clf_tag
+    if name == DEFAULT_CLASSIFIER:
+        return ""
+    last = name.split(":")[1] if name.startswith("robustbench:") else name.replace(":", "/").split("/")[-1]
+    return "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in last)[:32]
 
 
 # --------------------------------------------------------------------------------------------
@@ -169,6 +211,11 @@ def build_models(args, device):
     heads = build_heads(classifier, extra, flip=args.tta_flip)
     if extra or args.tta_flip:
         logger.info("classifier heads: %s (ensemble: %s)", sorted(heads), [args.classifier_name, *args.ens_list])
+    route_list = getattr(args, "route_list", [])
+    if route_list:
+        members = [classifier] + [_frozen(get_image_classifier(name), device) for name in route_list]
+        heads["+route"] = ConfidenceRouter(members)
+        logger.info("router head over %s", [args.classifier_name, *route_list])
 
     config = load_config(args.config)
     config.device = device
@@ -191,7 +238,8 @@ def build_models(args, device):
         logger.info("Wiener gain from %s (%s): mean %.4f, share of bins with W > 0.5: %.2f%%",
                     path, args.power_mode, float(gain.mean()), float((gain > 0.5).float().mean() * 100))
 
-    denoiser = DDSDenoiser(eps_fn, sigma=args.sigma, method=args.method if args.mode == "certify" else "wadds",
+    den_method = ("multistep" if args.method == CASCADE else args.method) if args.mode == "certify" else "wadds"
+    denoiser = DDSDenoiser(eps_fn, sigma=args.sigma, method=den_method,
                            steps=args.steps, eta=args.eta, gain=gain, gamma=args.gamma,
                            anchor_window=(args.anchor_t_min, args.anchor_t_max), t_end=args.t_end)
     if args.guide_lambda > 0:
@@ -246,6 +294,8 @@ def summarize_certify(run_dir, args):
     out = summarize(labels, predicts, radii, args.radii_list)
     out["complete"] = len(rr) == args.num_sub
     out["seconds_per_image"] = float(np.mean([float(r["seconds"]) for r in rr]))
+    if rr and "nfe_mean" in rr[0]:
+        out["nfe_mean"] = float(np.mean([float(r["nfe_mean"]) for r in rr]))
     return out
 
 
@@ -351,12 +401,16 @@ def main(argv=None):
     denoiser, heads, n_classes = build_models(args, device)
     if not isinstance(heads, dict):          # a bare classifier (tests)
         heads = {"": heads}
-    cert_key = certify_head_key(bool(getattr(args, "ens_list", [])), getattr(args, "tta_flip", False))
+    cert_key = "+route" if getattr(args, "route_list", []) else \
+        certify_head_key(bool(getattr(args, "ens_list", [])), getattr(args, "tta_flip", False))
     variants = DIAG_VARIANTS + ((GUIDED,) if getattr(denoiser, "guide", None) is not None else ())
     head_targets = {"multistep", GUIDED}   # extra heads only here (cost; wadds ~ multistep at eta 0)
     diag_keys = [v for v in variants] + [v + k for v in variants if v in head_targets for k in heads if k]
 
+    is_cascade = args.mode == "certify" and args.method == CASCADE
     prefix, fields = ("certify", CERT_FIELDS) if args.mode == "certify" else ("diag", DIAG_FIELDS)
+    if is_cascade:
+        fields = fields + ["nfe_mean"]
     path = shard_file(run_dir, prefix, args)
     done = set()
     if os.path.exists(path):
@@ -367,7 +421,11 @@ def main(argv=None):
     logger.info("%d images to do in shard %s (%d already done)", len(todo), args.shard, len(done))
 
     gen_ref = [None]
-    base = make_base_classifier(denoiser, heads[cert_key], gen_ref)
+    stats = {}
+    if is_cascade:
+        base = make_cascade_base(denoiser, heads[cert_key], heads[cert_key], args.exit_tau, gen_ref, stats)
+    else:
+        base = make_base_classifier(denoiser, heads[cert_key], gen_ref)
     fh, writer = open_writer(path, fields)
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -380,13 +438,16 @@ def main(argv=None):
             gen_ref[0] = gen
             t0 = time.time()
             if args.mode == "certify":
+                stats.clear()
                 r = certify(base, x, sigma=args.sigma, n0=args.n0, n=args.n, alpha=args.alpha,
                             n_classes=n_classes, batch=args.batch, generator=gen)
                 writer.writerow({"pos": pos, "idx": idx, "label": label, "predict": r.predict,
                                  "correct": int(r.predict == label), "p_lower": f"{r.p_lower:.6f}",
                                  "radius": f"{r.radius:.6f}",
                                  "count_cA": int(r.counts_estimate[r.predict]) if r.predict >= 0 else 0,
-                                 "seconds": f"{time.time() - t0:.2f}"})
+                                 "seconds": f"{time.time() - t0:.2f}",
+                                 **({"nfe_mean": f"{cascade_nfe(args.steps, stats['n_continued'] / stats['n']):.4f}"}
+                                    if is_cascade else {})})
             else:
                 counts = {v: np.zeros(n_classes, dtype=np.int64) for v in diag_keys}
                 remaining = args.n_diag

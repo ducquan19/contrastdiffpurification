@@ -33,6 +33,24 @@ class ClassifierHead:
         return torch.log(prob.clamp_min(1e-12))
 
 
+class ConfidenceRouter:
+    """Per sample, the log-probabilities of the member classifier with the largest max-probability.
+
+    Ties go to the first member (``argmax``), matching ``cascade.combine(..., ('route', ...))``.
+    """
+
+    def __init__(self, classifiers: Sequence[Callable[[torch.Tensor], torch.Tensor]]):
+        if len(classifiers) < 2:
+            raise ValueError("a router needs at least two classifiers")
+        self.classifiers = list(classifiers)
+
+    def __call__(self, x01: torch.Tensor) -> torch.Tensor:
+        probs = torch.stack([torch.softmax(f(x01).float(), dim=1) for f in self.classifiers], dim=1)
+        best = probs.max(dim=2).values.argmax(dim=1)                       # (B,)
+        chosen = probs[torch.arange(probs.shape[0], device=probs.device), best]
+        return torch.log(chosen.clamp_min(1e-12))
+
+
 def build_heads(main: Callable, extra: Sequence[Callable] = (), flip: bool = False) -> Dict[str, Callable]:
     """Heads keyed by their variant suffix: ``''`` (main classifier), ``'+flip'``, ``'+ens'``, ``'+ens+flip'``.
 

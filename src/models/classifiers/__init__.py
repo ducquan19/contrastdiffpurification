@@ -21,6 +21,7 @@ import robustbench.model_zoo.architectures.resnet as resnet
 from robustbench import load_model
 
 from src.models.classifiers.cifar10_resnet import resnet50, wide_resnet_70_16_dropout
+from src.models.hf_classifier import load_hf_classifier
 from src.paths import pretrained_path
 
 # RobustBench downloads its checkpoints here (instead of ./models relative to the cwd).
@@ -104,6 +105,11 @@ def get_image_classifier(classifier_name: str):
         dataset = parts[3] if len(parts) > 3 else 'cifar10'
         return load_model(model_dir=ROBUSTBENCH_MODEL_DIR, model_name=parts[1], dataset=dataset,
                           threat_model=threat_model).eval()
+
+    # hf:<repo> -- a HuggingFace classifier, e.g. Carlini et al.'s CIFAR-10 ViT-B/16
+    # hf:aaraki/vit-base-patch16-224-in21k-finetuned-cifar10
+    if classifier_name.startswith('hf:'):
+        return load_hf_classifier(classifier_name[3:])
 
     # 'cifar100' must be checked before 'cifar10', which is a substring of it
     if 'cifar100' in classifier_name:
