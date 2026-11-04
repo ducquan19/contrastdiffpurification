@@ -8,7 +8,8 @@
 #   CLF_ARGS="..." bash experiments/cascade/run_cifar10.sh main onestep|multistep|cascade
 #                                                     # CERTIFY 500 test images, N=10k, 8 shards per sigma
 #
-# 'main' examples (fair comparison with Carlini et al. / Consistency Purification = same ViT-B/16):
+# 'main' examples (fair comparison with Carlini et al. / Consistency Purification = same ViT-B/16);
+# the standard-WRN baselines on the same images: CLF_ARGS="" bash ... main onestep|multistep
 #   CLF_ARGS="--classifier_name hf:$VIT --clf_tag vitb16" bash ... main onestep
 #   CLF_ARGS="--classifier_name hf:$VIT --clf_tag vitb16" bash ... main multistep
 # the head chosen by 'analyze', e.g. a router of the standard WRN and an l2-robust WRN, as a cascade:
@@ -23,8 +24,12 @@ TAGS="wrn,wang23l2,rebuffi21l2,vitb16"
 SIGMAS="${SIGMAS:-0.25 0.5 1.0}"
 STEPS_LIST="${STEPS_LIST:-5,10}"
 COMMON="--config cifar10.yml --domain cifar10 --exp ./wadds --resume"
-CLF_ARGS="${CLF_ARGS:-}"
+CLF_ARGS="${CLF_ARGS:-}"      # empty = the standard WRN-28-10 (baseline rows)
 TAU="${TAU:-}"
+# 'main' subset: stride = test images 0, 20, ..., 9980 (Cohen et al.'s --skip 20, the usual 500-image
+# protocol); SPLIT=test gives the earlier random subset (data_seed 0) of outputs/wadds/*_test500_ds0.
+SPLIT="${SPLIT:-stride}"
+BATCH="${BATCH:-500}"
 
 laneA() { GPU_DEP=singleton GPU_NODE=gpu02 gpu_cmd laneA "$@"; }
 laneB() { GPU_DEP=singleton GPU_EXCLUDE=gpu02 gpu_cmd laneB "$@"; }
@@ -74,8 +79,8 @@ EOF
     esac
     for s in $SIGMAS; do
       for sh in 0 1 2 3 4 5 6 7; do
-        run="python -m scripts.certify_dds --mode certify $MARGS --sigma $s --eval_split test --num_sub 500 \
---data_seed 0 --n0 100 --n 10000 --alpha 0.001 --batch 500 --shard $sh/8 $COMMON $CLF_ARGS"
+        run="python -m scripts.certify_dds --mode certify $MARGS --sigma $s --eval_split $SPLIT --num_sub 500 \
+--data_seed 0 --n0 100 --n 10000 --alpha 0.001 --batch $BATCH --shard $sh/8 $COMMON $CLF_ARGS"
         if (( sh < 6 )); then laneA 8 "$run"; else laneB 8 "$run"; fi
       done
     done

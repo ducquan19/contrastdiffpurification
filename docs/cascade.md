@@ -65,3 +65,15 @@ Compare only at equal classifier and with the protocol stated:
 * N, number of images, alpha;
 * the diffusion model (ours: score_sde VP; Carlini: improved-diffusion 50M; CP: EDM);
 * extra data of the classifiers (ViT: ImageNet-21k; Wang2023Better / Rebuffi2021: generated data).
+
+## Evaluation subset
+
+`main` certifies `--eval_split stride`: test images 0, 20, ..., 9980. This is the subset of Cohen
+et al.'s `certify.py --skip 20`, which many randomized-smoothing papers report on; check each
+paper's protocol before quoting it.
+
+Earlier runs (`outputs/wadds/*_test500_ds0`) used a random subset (`RandomState(0)`, 500 images).
+
+10 of the 500 stride images are also among the 200 dev images. Those dev images chose the
+classifier and `tau`, so report the main table both on all 500 images and without these 10
+(`idx` is in every certify TSV).

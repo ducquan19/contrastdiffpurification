@@ -254,3 +254,14 @@ def test_plain_vit_matches_transformers():
     x = torch.randn(3, 3, 32, 32)
     with torch.no_grad():
         assert torch.allclose(ours(pixel_values=x).logits, ref(pixel_values=x).logits, atol=1e-5)
+
+
+def test_stride_subset_is_cohen_skip():
+    from src.data.loaders import EVAL_SPLITS, stride_indices
+
+    idx = stride_indices(10000, 500)
+    assert "stride" in EVAL_SPLITS and len(idx) == 500 and idx[0] == 0 and idx[-1] == 9980
+    assert np.all(np.diff(idx) == 20)
+    assert stride_indices(10000, 1000)[1] == 10                     # Carlini et al.'s default --skip 10
+    with pytest.raises(ValueError):
+        stride_indices(10, 11)

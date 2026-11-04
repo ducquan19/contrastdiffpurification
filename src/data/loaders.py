@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, Subset
 from src.data.specs import get_dataset_spec
 
 EVAL_INDICES_FILE = "eval_indices.json"
-EVAL_SPLITS = ("test", "val", "dev")
+EVAL_SPLITS = ("test", "val", "dev", "stride")
 
 # ``--eval_split dev`` draws from the *test* images that are NOT in the reported subset (the first
 # REPORT_SIZE images of ``data_seed`` REPORT_SEED), so hyperparameters are chosen on test-distribution
@@ -42,6 +42,14 @@ def dev_pool_indices(n_test: int) -> np.ndarray:
     """Test indices outside the reported subset (``select_subset_indices(n, REPORT_SIZE, REPORT_SEED)``)."""
     report = select_subset_indices(n_test, min(REPORT_SIZE, n_test), REPORT_SEED)
     return np.setdiff1d(np.arange(n_test), report)
+
+
+def stride_indices(n_test: int, num_sub: int) -> np.ndarray:
+    """``0, k, 2k, ...`` with ``k = n_test // num_sub`` (Cohen et al.'s ``--skip k``), ``num_sub`` indices."""
+    if not 0 < num_sub <= n_test:
+        raise ValueError(f"need 0 < num_sub <= {n_test}, got {num_sub}")
+    step = n_test // num_sub
+    return np.arange(0, step * num_sub, step)
 
 
 def bank_pool_size(n_train: int) -> int:
@@ -102,6 +110,10 @@ def load_eval_subset(
     The DataLoader consumes the global torch RNG, so changing ``num_workers`` (or calling this
     at a different point of the run) changes the diffusion noise drawn afterwards.
 
+    ``split='stride'`` takes every ``n_test // num_sub``-th test image starting at index 0 (500 images ->
+    0, 20, ..., 9980), the subset of Cohen et al.'s ``certify.py --skip 20`` that most randomized-
+    smoothing papers report on; ``data_seed`` is ignored.
+
     ``split='test'`` (default) is the evaluation subset of the published protocol. ``split='val'``
     draws the subset, with the same rule, from the held-out validation pool of the *training*
     split (``val_pool_indices``); ``indices`` are then training-split indices. Use it to tune.
@@ -118,6 +130,10 @@ def load_eval_subset(
             num_sub=num_sub,
             data_seed=data_seed
         )
+    elif split == "stride":
+        test_set = spec.build_split(train=False)
+        n_pool = len(test_set)
+        indices = stride_indices(n_pool, num_sub)
     elif split == "dev":
         test_set = spec.build_split(train=False)
         pool = dev_pool_indices(len(test_set))
@@ -150,7 +166,7 @@ def load_eval_subset(
             "num_sub": int(num_sub),
             "data_seed": int(data_seed),
             "split": split,
-            {"test": "test_split_size", "val": "val_pool_size", "dev": "dev_pool_size"}[split]: n_pool,
+            {"test": "test_split_size", "stride": "test_split_size", "val": "val_pool_size", "dev": "dev_pool_size"}[split]: n_pool,
             "indices": [int(i) for i in indices],
         }
 
