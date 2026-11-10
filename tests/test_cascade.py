@@ -265,3 +265,34 @@ def test_stride_subset_is_cohen_skip():
     assert stride_indices(10000, 1000)[1] == 10                     # Carlini et al.'s default --skip 10
     with pytest.raises(ValueError):
         stride_indices(10, 11)
+
+
+def test_main_table_end_to_end(tmp_path, monkeypatch, capsys):
+    from scripts import certify_dds as cd
+    from scripts import main_table as mt
+
+    dev = sorted(mt.dev_indices())
+    idx = np.array([dev[0], 1, 2, 3])                         # one dev image among the test images
+    if 1 in dev or 2 in dev or 3 in dev:
+        idx = np.array([dev[0]] + [i for i in range(10, 40) if i not in dev][:3])
+    torch.manual_seed(0)
+    x = torch.rand(4, *SHAPE)
+    monkeypatch.setattr(cd, "load_eval_subset", lambda *a, **k: (x.clone(), torch.tensor([0, 1, 2, 0]), idx))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    f = linear(0, scale=0.5)
+    monkeypatch.setattr(cd, "build_models", lambda args, device: (
+        DDSDenoiser(toy_eps, sigma=0.5, method="onestep" if args.method == "onestep" else "multistep",
+                    steps=2, eta=0.0), f, 3))
+    common = ["--mode", "certify", "--sigma", "0.5", "--num_sub", "4", "--n0", "8", "--n", "40", "--batch", "16",
+              "--exp", str(tmp_path), "--eval_split", "stride"]
+    cd.main(common + ["--method", "multistep", "--steps", "2", "--eta", "0"])
+    cd.main(common + ["--method", "onestep"])
+    cd.main(common + ["--method", "cascade", "--steps", "2", "--eta", "0", "--exit_tau", "0.7"])
+    out_csv = tmp_path / "t.csv"
+    mt.main([str(p) for p in sorted(tmp_path.iterdir()) if p.is_dir()] + ["--ref_method", "multistep S2",
+                                                                       "--csv", str(out_csv)])
+    out = capsys.readouterr().out
+    assert "reference: wrn | multistep S2" in out and "vs ref: d_ACR" in out
+    assert "1 of the test images are also screen dev images" in out and "without the 1 dev images" in out
+    rows = list(__import__("csv").DictReader(open(out_csv, encoding="utf-8")))
+    assert len(rows) == 3 and {r["method"] for r in rows} == {"multistep S2", "onestep", "cascade S2 tau0.7"}
