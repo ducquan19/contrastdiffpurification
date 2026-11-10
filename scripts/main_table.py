@@ -107,8 +107,9 @@ def print_table(runs, keep, title, ref_match):
         print(f"  sigma = {s:g}" + (f"   (reference: {ref['label']})" if ref else "   (no reference run)"))
         for r in group:
             st = stats(r, keep)
-            nfe = st["nfe"] if st["nfe"] is not None else (1.0 if r["method"].startswith("onestep") else
-                                                           float(r["method"].split("S")[1].split()[0]))
+            nfe = st["nfe"] if st["nfe"] is not None else (
+                0.0 if r["method"] == "none" else 1.0 if r["method"].startswith("onestep") else
+                float(r["method"].split("S")[1].split()[0]))
             flag = "" if len(r["rows"]) == r["num_sub"] else f"  INCOMPLETE {len(r['rows'])}/{r['num_sub']}"
             print(("  {:<34s} {:>4d} " + " ".join(["{:5.1f}"] * len(RADII)) + " {:7.4f} {:5.2f} {:6.1f}{}").format(
                 r["label"][:34], st["n"], *[st[x] for x in RADII], st["acr"], nfe, st["sec"], flag))

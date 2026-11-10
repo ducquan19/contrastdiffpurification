@@ -296,3 +296,24 @@ def test_main_table_end_to_end(tmp_path, monkeypatch, capsys):
     assert "1 of the test images are also screen dev images" in out and "without the 1 dev images" in out
     rows = list(__import__("csv").DictReader(open(out_csv, encoding="utf-8")))
     assert len(rows) == 3 and {r["method"] for r in rows} == {"multistep S2", "onestep", "cascade S2 tau0.7"}
+
+
+def test_no_denoiser_ablation(tmp_path, monkeypatch):
+    from scripts import certify_dds as cd
+    from src.certify.denoisers import IdentityDenoiser
+
+    x = torch.rand(2, *SHAPE)
+    monkeypatch.setattr(cd, "load_eval_subset", lambda *a, **k: (x.clone(), torch.tensor([0, 1]), np.arange(2)))
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    seen = []
+    f = linear(0)
+
+    def spy(img):
+        seen.append(img)
+        return f(img)
+    monkeypatch.setattr(cd, "build_models", lambda args, device: (IdentityDenoiser(args.sigma), spy, 3))
+    cd.main(["--mode", "certify", "--method", "none", "--sigma", "0.5", "--num_sub", "2", "--n0", "4", "--n", "8",
+             "--batch", "4", "--exp", str(tmp_path), "--run_name", "r"])
+    assert json.loads((tmp_path / "r" / "summary.json").read_text())["complete"]
+    assert any(float(v.max()) > 1.0 or float(v.min()) < 0.0 for v in seen)        # unclipped noisy input
+    assert cd.default_run_name(cd.parse_args(["--sigma", "0.5", "--method", "none"])).startswith("nodenoiser_s0.5_")

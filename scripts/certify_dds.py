@@ -33,7 +33,7 @@ import numpy as np
 import torch
 
 from src.certify.denoisers import (DIAG_VARIANTS, GUIDE_BASES, GUIDED, METHODS, DDSDenoiser,
-                                   make_base_classifier)
+                                   IdentityDenoiser, make_base_classifier)
 from src.certify.cascade import cascade_nfe, make_cascade_base
 from src.certify.heads import ConfidenceRouter, build_heads, certify_head_key
 from src.certify.smoothing import (DEFAULT_RADII, certify, image_generator, plugin_radius,
@@ -48,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 CERT_FIELDS = ["pos", "idx", "label", "predict", "correct", "p_lower", "radius", "count_cA", "seconds"]
 CASCADE = "cascade"
-CERT_METHODS = METHODS + (CASCADE,)
+NO_DENOISER = "none"
+CERT_METHODS = METHODS + (CASCADE, NO_DENOISER)
 DEFAULT_CLASSIFIER = "cifar10-wideresnet-28-10"
 DIAG_FIELDS = ["pos", "idx", "label", "variant", "n", "n_true", "top_class", "n_top"]
 
@@ -128,7 +129,7 @@ def parse_args(argv=None):
             p.error("--method cascade does not support guidance")
         if args.mode != "certify":
             p.error("--method cascade is a --mode certify method (screen it with scripts/screen_cascade.py)")
-    if args.mode == "certify" and args.method == "onestep" and args.guide_lambda > 0:
+    if args.mode == "certify" and args.method in ("onestep", NO_DENOISER) and args.guide_lambda > 0:
         p.error("--guide_lambda needs --method multistep or wadds")
     return args
 
@@ -141,6 +142,8 @@ def default_run_name(args) -> str:
         name = f"onestep_{base}"
     elif args.method == "multistep":
         name = f"multistep_{base}_S{args.steps}_eta{args.eta:g}"
+    elif args.method == NO_DENOISER:
+        name = f"nodenoiser_{base}"
     elif args.method == CASCADE:
         name = f"cascade_{base}_S{args.steps}_eta{args.eta:g}_tau{args.exit_tau:g}"
     else:
@@ -216,6 +219,10 @@ def build_models(args, device):
         members = [classifier] + [_frozen(get_image_classifier(name), device) for name in route_list]
         heads["+route"] = ConfidenceRouter(members)
         logger.info("router head over %s", [args.classifier_name, *route_list])
+
+    if args.mode == "certify" and args.method == NO_DENOISER:      # plain RS: no score model
+        logger.info("sigma=%g, method=none (plain randomized smoothing, 0 NFE)", args.sigma)
+        return IdentityDenoiser(args.sigma), heads, spec.num_classes
 
     config = load_config(args.config)
     config.device = device

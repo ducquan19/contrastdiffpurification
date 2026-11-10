@@ -30,6 +30,7 @@ TAU="${TAU:-}"
 # protocol); SPLIT=test gives the earlier random subset (data_seed 0) of outputs/wadds/*_test500_ds0.
 SPLIT="${SPLIT:-stride}"
 BATCH="${BATCH:-500}"
+N="${N:-10000}"               # N=100000: the larger-radius protocol of Carlini et al. / DiffSmooth
 
 laneA() { GPU_DEP=singleton GPU_NODE=gpu02 gpu_cmd laneA "$@"; }
 laneB() { GPU_DEP=singleton GPU_EXCLUDE=gpu02 gpu_cmd laneB "$@"; }
@@ -71,23 +72,24 @@ EOF
     METHOD="${2:-}"
     case "$METHOD" in
       onestep) MARGS="--method onestep" ;;
+      none) MARGS="--method none" ;;                       # ablation: plain RS, no denoiser
       multistep) MARGS="--method multistep --steps 10 --eta 0" ;;
       cascade)
         [ -n "$TAU" ] || { echo "main cascade needs TAU=<threshold chosen by analyze>" >&2; exit 1; }
         MARGS="--method cascade --steps 10 --eta 0 --exit_tau $TAU" ;;
-      *) echo "usage: $0 main {onestep|multistep|cascade}" >&2; exit 1 ;;
+      *) echo "usage: $0 main {onestep|multistep|cascade|none}" >&2; exit 1 ;;
     esac
     for s in $SIGMAS; do
       for sh in 0 1 2 3 4 5 6 7; do
         run="python -m scripts.certify_dds --mode certify $MARGS --sigma $s --eval_split $SPLIT --num_sub 500 \
---data_seed 0 --n0 100 --n 10000 --alpha 0.001 --batch $BATCH --shard $sh/8 $COMMON $CLF_ARGS"
+--data_seed 0 --n0 100 --n $N --alpha 0.001 --batch $BATCH --shard $sh/8 $COMMON $CLF_ARGS"
         if (( sh < 6 )); then laneA 8 "$run"; else laneB 8 "$run"; fi
       done
     done
     ;;
 
   *)
-    echo "usage: $0 {fetch|screen|analyze|main onestep|multistep|cascade}" >&2
+    echo "usage: $0 {fetch|screen|analyze|main onestep|multistep|cascade|none}" >&2
     exit 1
     ;;
 esac

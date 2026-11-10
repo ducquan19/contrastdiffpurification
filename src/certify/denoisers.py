@@ -267,6 +267,25 @@ class DDSDenoiser:
         return {k: ((v.clamp(-1, 1) + 1) * 0.5) for k, v in out.items() if k in variants}
 
 
+class IdentityDenoiser:
+    """``--method none``: plain randomized smoothing, the classifier sees ``x~`` itself (0 NFE).
+
+    The ablation that shows the denoiser is needed; the noisy input is passed unclipped, as in
+    Cohen et al.
+    """
+
+    method = "none"
+    nfe = 0
+    guide = None
+    t_sigma = 0.0
+
+    def __init__(self, sigma: float):
+        self.sigma = float(sigma)
+
+    def __call__(self, x_noisy: torch.Tensor, generator: Optional[torch.Generator] = None) -> torch.Tensor:
+        return x_noisy
+
+
 def make_base_classifier(denoiser: DDSDenoiser, classifier: Callable[[torch.Tensor], torch.Tensor],
                          generator_ref: list) -> Callable[[torch.Tensor], torch.Tensor]:
     """``h(x~) = argmax classifier(denoiser(x~))``; ``generator_ref[0]`` is the current generator.
